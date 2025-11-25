@@ -68,12 +68,22 @@ Safely reduces warehouse inventory quantity
 - Shows "Contact Admin" if not registered
 - Shows permanent menu keyboard if registered
 
-### Admin Commands
-- `/addmaster` - Admin-only command to create new masters/workers
-  - Restricted to user with ADMIN_USER_ID
+### Admin Panel (Button-Based)
+When the admin user starts the bot, they see a special admin menu with the following buttons:
+- **➕ Usta qo'shish** (Add Master) - Create new masters/workers
   - Collects: name, phone, telegram_id, region
   - Validates unique phone and telegram_id
   - Provides error feedback for duplicates
+- **➕ Mahsulot qo'shish** (Add Product) - Add products to warehouse
+  - Collects: name, quantity, price, category (optional), subcategory (optional)
+  - Validates input and checks for duplicates
+- **👥 Barcha ustalar** (View All Masters) - Display all registered masters with details
+- **📋 Barcha buyurtmalar** (View All Orders) - Show last 20 orders with master names
+- **📦 Ombor** (Warehouse) - View warehouse inventory
+- **🔙 Orqaga** (Back) - Return to admin menu
+
+All admin functions are accessible via buttons (no "/" commands needed).
+The `/addmaster` command is still available as a fallback option.
 
 ### Permanent Menu
 The bot displays a persistent keyboard with the following buttons (in Uzbek):
@@ -164,3 +174,5 @@ When a master clicks "Yo'ldaman" (I'm on my way), the bot automatically:
 - 2025-11-25: Added GPS tracking feature - "Yo'ldaman" button now auto-requests and saves master GPS location
 - 2025-11-25: Imported and configured bot to run in Replit environment with PostgreSQL database
 - 2025-11-25: Added admin functionality - /addmaster command to create new masters/workers with proper authentication
+- 2025-11-25: Converted all admin functions to button-based interface (Add Master, Add Product, View Masters, View All Orders)
+- 2025-11-25: Created admin panel with persistent keyboard menu for easy navigation

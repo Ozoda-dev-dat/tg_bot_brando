@@ -32,9 +32,23 @@ function getMainMenu() {
     .persistent();
 }
 
+function getAdminMenu() {
+  return new Keyboard()
+    .text('➕ Usta qo\'shish').text('➕ Mahsulot qo\'shish').row()
+    .text('👥 Barcha ustalar').text('📋 Barcha buyurtmalar').row()
+    .text('📦 Ombor').text('🔙 Orqaga')
+    .resized()
+    .persistent();
+}
+
 bot.command('start', async (ctx) => {
   try {
     const telegramId = ctx.from.id;
+    
+    if (isAdmin(telegramId)) {
+      return ctx.reply('Admin paneliga xush kelibsiz! 🔧', { reply_markup: getAdminMenu() });
+    }
+    
     const result = await pool.query(
       'SELECT * FROM masters WHERE telegram_id = $1',
       [telegramId]
@@ -116,7 +130,7 @@ bot.hears('Mening buyurtmalarim', async (ctx) => {
   }
 });
 
-bot.hears('Ombor', async (ctx) => {
+bot.hears(['Ombor', '📦 Ombor'], async (ctx) => {
   try {
     const products = await pool.query(
       'SELECT name, quantity, price FROM warehouse ORDER BY name'
@@ -132,6 +146,118 @@ bot.hears('Ombor', async (ctx) => {
     });
     
     ctx.reply(message);
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('➕ Usta qo\'shish', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const session = getSession(ctx.from.id);
+    session.step = 'admin_master_name';
+    session.data = {};
+    ctx.reply('Yangi usta ismini kiriting:');
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('➕ Mahsulot qo\'shish', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const session = getSession(ctx.from.id);
+    session.step = 'admin_product_name';
+    session.data = {};
+    ctx.reply('Mahsulot nomini kiriting:');
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('👥 Barcha ustalar', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const masters = await pool.query(
+      'SELECT id, name, phone, region FROM masters ORDER BY id'
+    );
+    
+    if (masters.rows.length === 0) {
+      return ctx.reply('Ustalar topilmadi');
+    }
+    
+    let message = '👥 Barcha ustalar:\n\n';
+    masters.rows.forEach(master => {
+      message += `ID: ${master.id}\n`;
+      message += `Ism: ${master.name}\n`;
+      message += `Telefon: ${master.phone}\n`;
+      message += `Hudud: ${master.region}\n\n`;
+    });
+    
+    ctx.reply(message);
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('📋 Barcha buyurtmalar', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const orders = await pool.query(
+      `SELECT o.id, m.name as master_name, o.client_name, o.product, o.status, o.created_at
+       FROM orders o
+       JOIN masters m ON o.master_id = m.id
+       ORDER BY o.created_at DESC
+       LIMIT 20`
+    );
+    
+    if (orders.rows.length === 0) {
+      return ctx.reply('Buyurtmalar topilmadi');
+    }
+    
+    let message = '📋 Oxirgi 20 buyurtma:\n\n';
+    orders.rows.forEach(order => {
+      message += `ID: ${order.id}\n`;
+      message += `Usta: ${order.master_name}\n`;
+      message += `Mijoz: ${order.client_name}\n`;
+      message += `Mahsulot: ${order.product}\n`;
+      message += `Holat: ${order.status}\n`;
+      message += `Sana: ${order.created_at.toLocaleString('uz-UZ')}\n\n`;
+    });
+    
+    ctx.reply(message);
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('🔙 Orqaga', async (ctx) => {
+  try {
+    if (isAdmin(ctx.from.id)) {
+      return ctx.reply('Admin paneliga xush kelibsiz! 🔧', { reply_markup: getAdminMenu() });
+    }
+    
+    const result = await pool.query(
+      'SELECT * FROM masters WHERE telegram_id = $1',
+      [ctx.from.id]
+    );
+    
+    if (result.rows.length > 0) {
+      const master = result.rows[0];
+      ctx.reply(`Xush kelibsiz ${master.name}!`, { reply_markup: getMainMenu() });
+    }
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
   }
@@ -183,13 +309,66 @@ bot.on('message:text', async (ctx) => {
           `Ism: ${session.data.masterName}\n` +
           `Telefon: ${session.data.masterPhone}\n` +
           `Telegram ID: ${session.data.masterTelegramId}\n` +
-          `Hudud: ${session.data.masterRegion}`
+          `Hudud: ${session.data.masterRegion}`,
+          { reply_markup: getAdminMenu() }
         );
         
         clearSession(ctx.from.id);
       } catch (dbError) {
         if (dbError.code === '23505') {
           ctx.reply('Xatolik: Bu telefon yoki Telegram ID allaqachon mavjud');
+        } else {
+          ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
+        }
+      }
+    } else if (session.step === 'admin_product_name') {
+      session.data.productName = ctx.message.text;
+      session.step = 'admin_product_quantity';
+      ctx.reply('Miqdorni kiriting:');
+    } else if (session.step === 'admin_product_quantity') {
+      const quantity = parseInt(ctx.message.text);
+      if (isNaN(quantity) || quantity < 0) {
+        return ctx.reply('Iltimos, to\'g\'ri miqdorni kiriting (0 yoki katta)');
+      }
+      session.data.productQuantity = quantity;
+      session.step = 'admin_product_price';
+      ctx.reply('Narxni kiriting:');
+    } else if (session.step === 'admin_product_price') {
+      const price = parseFloat(ctx.message.text);
+      if (isNaN(price) || price < 0) {
+        return ctx.reply('Iltimos, to\'g\'ri narxni kiriting');
+      }
+      session.data.productPrice = price;
+      session.step = 'admin_product_category';
+      ctx.reply('Kategoriyani kiriting (ixtiyoriy, o\'tkazish uchun "-" yozing):');
+    } else if (session.step === 'admin_product_category') {
+      session.data.productCategory = ctx.message.text === '-' ? null : ctx.message.text;
+      session.step = 'admin_product_subcategory';
+      ctx.reply('Subkategoriyani kiriting (ixtiyoriy, o\'tkazish uchun "-" yozing):');
+    } else if (session.step === 'admin_product_subcategory') {
+      session.data.productSubcategory = ctx.message.text === '-' ? null : ctx.message.text;
+      
+      try {
+        await pool.query(
+          'INSERT INTO warehouse (name, quantity, price, category, subcategory) VALUES ($1, $2, $3, $4, $5)',
+          [session.data.productName, session.data.productQuantity, session.data.productPrice, 
+           session.data.productCategory, session.data.productSubcategory]
+        );
+        
+        ctx.reply(
+          `✅ Yangi mahsulot qo'shildi!\n\n` +
+          `Nomi: ${session.data.productName}\n` +
+          `Miqdor: ${session.data.productQuantity}\n` +
+          `Narx: $${session.data.productPrice}\n` +
+          `Kategoriya: ${session.data.productCategory || 'Yo\'q'}\n` +
+          `Subkategoriya: ${session.data.productSubcategory || 'Yo\'q'}`,
+          { reply_markup: getAdminMenu() }
+        );
+        
+        clearSession(ctx.from.id);
+      } catch (dbError) {
+        if (dbError.code === '23505') {
+          ctx.reply('Xatolik: Bu mahsulot allaqachon mavjud');
         } else {
           ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
         }

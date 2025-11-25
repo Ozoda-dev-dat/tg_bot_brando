@@ -68,6 +68,13 @@ Safely reduces warehouse inventory quantity
 - Shows "Contact Admin" if not registered
 - Shows permanent menu keyboard if registered
 
+### Admin Commands
+- `/addmaster` - Admin-only command to create new masters/workers
+  - Restricted to user with ADMIN_USER_ID
+  - Collects: name, phone, telegram_id, region
+  - Validates unique phone and telegram_id
+  - Provides error feedback for duplicates
+
 ### Permanent Menu
 The bot displays a persistent keyboard with the following buttons (in Uzbek):
 - Row 1: `+ Yangi yetkazish` (+ New delivery)
@@ -121,6 +128,7 @@ Required secrets:
 - `BOT_TOKEN` - Telegram bot token from @BotFather
 - `DATABASE_URL` - PostgreSQL connection string (auto-configured)
 - `ADMIN_CHAT_ID` - Admin group chat ID for order notifications (format: -100xxxxxxxxx)
+- `ADMIN_USER_ID` - Admin's Telegram user ID for /addmaster command access
 
 ## Admin Notifications
 When a new order is created, the bot sends a notification to the admin group (if ADMIN_CHAT_ID is configured) containing:
@@ -154,3 +162,5 @@ When a master clicks "Yo'ldaman" (I'm on my way), the bot automatically:
 - 2025-11-25: Updated console startup message to "Brando Bot - Started with NeonDB 2025"
 - 2025-11-25: Converted entire bot interface to Uzbek language
 - 2025-11-25: Added GPS tracking feature - "Yo'ldaman" button now auto-requests and saves master GPS location
+- 2025-11-25: Imported and configured bot to run in Replit environment with PostgreSQL database
+- 2025-11-25: Added admin functionality - /addmaster command to create new masters/workers with proper authentication

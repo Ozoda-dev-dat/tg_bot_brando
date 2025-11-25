@@ -1,0 +1,23 @@
+{
+  "name": "telegram-delivery-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for delivery management with NeonDB",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "grammy",
+    "neondb",
+    "postgresql"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "grammy": "^1.38.4",
+    "pg": "^8.16.3"
+  }
+}

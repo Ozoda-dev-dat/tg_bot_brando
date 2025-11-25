@@ -5,6 +5,7 @@ const { Pool } = require('pg');
 const bot = new Bot(process.env.BOT_TOKEN);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
 
 const sessions = new Map();
 
@@ -17,6 +18,10 @@ function getSession(userId) {
 
 function clearSession(userId) {
   sessions.set(userId, { step: null, data: {} });
+}
+
+function isAdmin(userId) {
+  return ADMIN_USER_ID && userId === ADMIN_USER_ID;
 }
 
 function getMainMenu() {
@@ -41,6 +46,21 @@ bot.command('start', async (ctx) => {
 
     const master = result.rows[0];
     ctx.reply(`Xush kelibsiz ${master.name}!`, { reply_markup: getMainMenu() });
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.command('addmaster', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu buyruq faqat admin uchun');
+    }
+    
+    const session = getSession(ctx.from.id);
+    session.step = 'admin_master_name';
+    session.data = {};
+    ctx.reply('Yangi usta ismini kiriting:');
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
   }
@@ -133,7 +153,48 @@ bot.on('message:text', async (ctx) => {
   try {
     const session = getSession(ctx.from.id);
     
-    if (session.step === 'customer_name') {
+    if (session.step === 'admin_master_name') {
+      session.data.masterName = ctx.message.text;
+      session.step = 'admin_master_phone';
+      ctx.reply('Telefon raqamini kiriting:');
+    } else if (session.step === 'admin_master_phone') {
+      session.data.masterPhone = ctx.message.text;
+      session.step = 'admin_master_telegram_id';
+      ctx.reply('Telegram ID ni kiriting (foydalanuvchi @userinfobot ga yozsin):');
+    } else if (session.step === 'admin_master_telegram_id') {
+      const telegramId = parseInt(ctx.message.text);
+      if (isNaN(telegramId)) {
+        return ctx.reply('Iltimos, to\'g\'ri Telegram ID kiriting (raqam)');
+      }
+      session.data.masterTelegramId = telegramId;
+      session.step = 'admin_master_region';
+      ctx.reply('Hududni kiriting:');
+    } else if (session.step === 'admin_master_region') {
+      session.data.masterRegion = ctx.message.text;
+      
+      try {
+        await pool.query(
+          'INSERT INTO masters (name, phone, telegram_id, region) VALUES ($1, $2, $3, $4)',
+          [session.data.masterName, session.data.masterPhone, session.data.masterTelegramId, session.data.masterRegion]
+        );
+        
+        ctx.reply(
+          `✅ Yangi usta qo'shildi!\n\n` +
+          `Ism: ${session.data.masterName}\n` +
+          `Telefon: ${session.data.masterPhone}\n` +
+          `Telegram ID: ${session.data.masterTelegramId}\n` +
+          `Hudud: ${session.data.masterRegion}`
+        );
+        
+        clearSession(ctx.from.id);
+      } catch (dbError) {
+        if (dbError.code === '23505') {
+          ctx.reply('Xatolik: Bu telefon yoki Telegram ID allaqachon mavjud');
+        } else {
+          ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
+        }
+      }
+    } else if (session.step === 'customer_name') {
       session.data.customerName = ctx.message.text;
       session.step = 'phone';
       ctx.reply('Telefon raqamini yuboring (matn yoki kontakt):');

@@ -39,7 +39,14 @@ CREATE TABLE IF NOT EXISTS orders (
     signature TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
     master_current_lat DOUBLE PRECISION,
-    master_current_lng DOUBLE PRECISION
+    master_current_lng DOUBLE PRECISION,
+    warranty_expired BOOLEAN DEFAULT NULL,
+    spare_part_sent BOOLEAN DEFAULT FALSE,
+    spare_part_received BOOLEAN DEFAULT FALSE,
+    spare_part_photo TEXT,
+    completion_gps_lat DOUBLE PRECISION,
+    completion_gps_lng DOUBLE PRECISION,
+    master_telegram_id BIGINT
 );
 
 CREATE OR REPLACE FUNCTION decrease_stock(p_name TEXT, p_qty INT)

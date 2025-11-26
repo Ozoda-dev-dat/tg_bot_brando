@@ -45,6 +45,7 @@ function getAdminMenu() {
 bot.command('start', async (ctx) => {
   try {
     const telegramId = ctx.from.id;
+    clearSession(telegramId);
     
     if (isAdmin(telegramId)) {
       return ctx.reply('Admin paneliga xush kelibsiz! 🔧', { reply_markup: getAdminMenu() });
@@ -62,6 +63,7 @@ bot.command('start', async (ctx) => {
     const master = result.rows[0];
     ctx.reply(`Xush kelibsiz ${master.name}!`, { reply_markup: getMainMenu() });
   } catch (error) {
+    console.error('Start command error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -403,7 +405,7 @@ bot.on('message:text', async (ctx) => {
           `✅ Yangi mahsulot qo'shildi!\n\n` +
           `Nomi: ${session.data.productName}\n` +
           `Miqdor: ${session.data.productQuantity}\n` +
-          `Narx: $${session.data.productPrice}\n` +
+          `Narx: ${session.data.productPrice} so'm\n` +
           `Kategoriya: ${session.data.productCategory || 'Yo\'q'}\n` +
           `Subkategoriya: ${session.data.productSubcategory || 'Yo\'q'}`,
           { reply_markup: getAdminMenu() }
@@ -486,18 +488,40 @@ bot.on('message:text', async (ctx) => {
     } else if (session.step === 'customer_name') {
       session.data.customerName = ctx.message.text;
       session.step = 'phone';
-      ctx.reply('Telefon raqamini yuboring (matn yoki kontakt):');
+      
+      const contactKeyboard = new Keyboard()
+        .requestContact('📱 Kontaktni yuborish')
+        .resized()
+        .oneTime();
+      
+      ctx.reply('Telefon raqamini yuboring (matn yoki kontakt):', { reply_markup: contactKeyboard });
     } else if (session.step === 'phone') {
       session.data.phone = ctx.message.text;
       session.step = 'address';
-      ctx.reply('Manzilni yuboring (matn yoki joylashuv):');
+      
+      const locationKeyboard = new Keyboard()
+        .requestLocation('📍 Joylashuvni yuborish')
+        .resized()
+        .oneTime();
+      
+      ctx.reply('Manzilni yuboring (matn yoki joylashuv):', { reply_markup: locationKeyboard });
     } else if (session.step === 'address') {
       session.data.address = ctx.message.text;
       session.data.lat = null;
       session.data.lng = null;
       session.step = 'product';
       
-      const products = await pool.query('SELECT DISTINCT name FROM warehouse ORDER BY name');
+      const telegramId = ctx.from.id;
+      const masterResult = await pool.query(
+        'SELECT region FROM masters WHERE telegram_id = $1',
+        [telegramId]
+      );
+      const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
+      
+      const products = await pool.query(
+        'SELECT DISTINCT name FROM warehouse WHERE region = $1 OR region IS NULL ORDER BY name',
+        [masterRegion]
+      );
       if (products.rows.length > 0) {
         const keyboard = new InlineKeyboard();
         products.rows.slice(0, 10).forEach(p => {
@@ -508,7 +532,7 @@ bot.on('message:text', async (ctx) => {
       } else {
         ctx.reply('Mahsulot nomini kiriting:');
       }
-    } else if (session.step === 'product_manual') {
+    } else if (session.step === 'product' || session.step === 'product_manual') {
       session.data.product = ctx.message.text;
       session.step = 'quantity';
       ctx.reply('Miqdorni kiriting:');
@@ -526,14 +550,23 @@ bot.on('message:text', async (ctx) => {
         [telegramId]
       );
       
+      if (master.rows.length === 0) {
+        clearSession(ctx.from.id);
+        return ctx.reply('Siz ro\'yxatdan o\'tmagansiz. Adminga murojaat qiling.');
+      }
+      
       const masterRegion = master.rows[0].region;
       
       const stock = await pool.query(
-        'SELECT quantity FROM warehouse WHERE name = $1 AND (region = $2 OR region IS NULL)',
+        `SELECT id, quantity, region FROM warehouse 
+         WHERE name = $1 AND (region = $2 OR region IS NULL)
+         ORDER BY CASE WHEN region = $2 THEN 0 ELSE 1 END
+         LIMIT 1`,
         [session.data.product, masterRegion]
       );
       
       const available = stock.rows.length > 0 ? stock.rows[0].quantity : 0;
+      const stockId = stock.rows.length > 0 ? stock.rows[0].id : null;
       
       if (stock.rows.length === 0 || available < quantity) {
         const shortage = quantity - available;
@@ -558,7 +591,8 @@ bot.on('message:text', async (ctx) => {
           }
         }
         
-        return ctx.reply(`Omborda yetarli emas. Mavjud: ${available} dona. Adminga xabar yuborildi.`);
+        clearSession(ctx.from.id);
+        return ctx.reply(`Omborda yetarli emas. Mavjud: ${available} dona. Adminga xabar yuborildi.`, { reply_markup: getMainMenu() });
       }
       
       const orderResult = await pool.query(
@@ -570,8 +604,8 @@ bot.on('message:text', async (ctx) => {
       );
       
       await pool.query(
-        'UPDATE warehouse SET quantity = quantity - $1 WHERE name = $2 AND (region = $3 OR region IS NULL)',
-        [session.data.quantity, session.data.product, masterRegion]
+        'UPDATE warehouse SET quantity = quantity - $1 WHERE id = $2',
+        [session.data.quantity, stockId]
       );
       
       session.data.orderId = orderResult.rows[0].id;
@@ -624,6 +658,7 @@ bot.on('message:text', async (ctx) => {
       }
     }
   } catch (error) {
+    console.error('Message text handler error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -637,6 +672,7 @@ bot.on('message:contact', async (ctx) => {
       ctx.reply('Manzilni yuboring (matn yoki joylashuv):');
     }
   } catch (error) {
+    console.error('Contact handler error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -650,7 +686,17 @@ bot.on('message:location', async (ctx) => {
       session.data.lng = ctx.message.location.longitude;
       session.step = 'product';
       
-      const products = await pool.query('SELECT DISTINCT name FROM warehouse ORDER BY name');
+      const telegramId = ctx.from.id;
+      const masterResult = await pool.query(
+        'SELECT region FROM masters WHERE telegram_id = $1',
+        [telegramId]
+      );
+      const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
+      
+      const products = await pool.query(
+        'SELECT DISTINCT name FROM warehouse WHERE region = $1 OR region IS NULL ORDER BY name',
+        [masterRegion]
+      );
       if (products.rows.length > 0) {
         const keyboard = new InlineKeyboard();
         products.rows.slice(0, 10).forEach(p => {
@@ -678,6 +724,7 @@ bot.on('message:location', async (ctx) => {
       ctx.reply('📍 GPS joylashuv saqlandi!\nHolat: Yo\'lda', { reply_markup: keyboard });
     }
   } catch (error) {
+    console.error('Location handler error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -734,11 +781,18 @@ bot.callbackQuery(/^arrived:(\d+)$/, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     const orderId = ctx.match[1];
+    
+    await pool.query(
+      "UPDATE orders SET status = 'arrived' WHERE id = $1",
+      [orderId]
+    );
+    
     const session = getSession(ctx.from.id);
     session.data.orderId = orderId;
     session.step = 'before_photo';
-    ctx.reply('Oldingi rasmni yuboring:');
+    ctx.reply('📍 Yetib keldingiz! Holat yangilandi.\n\nOldingi rasmni yuboring:');
   } catch (error) {
+    console.error('Arrived callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -778,6 +832,7 @@ bot.on('message:photo', async (ctx) => {
       ctx.reply('Barcha rasmlar qabul qilindi', { reply_markup: keyboard });
     }
   } catch (error) {
+    console.error('Photo handler error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -788,14 +843,15 @@ bot.callbackQuery(/^delivered:(\d+)$/, async (ctx) => {
     const orderId = ctx.match[1];
     
     await pool.query(
-      "UPDATE orders SET status = 'closed' WHERE id = $1",
+      "UPDATE orders SET status = 'delivered' WHERE id = $1",
       [orderId]
     );
     
     clearSession(ctx.from.id);
     
-    ctx.reply('Buyurtma bajarildi!', { reply_markup: getMainMenu() });
+    ctx.reply('✅ Buyurtma muvaffaqiyatli yetkazildi!', { reply_markup: getMainMenu() });
   } catch (error) {
+    console.error('Delivered callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });

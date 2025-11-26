@@ -4,7 +4,9 @@
   "description": "Telegram bot for delivery management with NeonDB",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node start.js",
+    "bot": "node bot.js",
+    "setup-db": "node setup-db.js"
   },
   "keywords": [
     "telegram",

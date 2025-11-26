@@ -532,13 +532,20 @@ bot.on('message:text', async (ctx) => {
       
       const telegramId = ctx.from.id;
       const master = await pool.query(
-        'SELECT id, name FROM masters WHERE telegram_id = $1',
+        'SELECT id, name, phone as master_phone, region FROM masters WHERE telegram_id = $1',
         [telegramId]
       );
       
+      const productInfo = await pool.query(
+        'SELECT price FROM warehouse WHERE name = $1',
+        [session.data.product]
+      );
+      const productPrice = productInfo.rows.length > 0 ? productInfo.rows[0].price : 0;
+      const totalPrice = productPrice * session.data.quantity;
+      
       const orderResult = await pool.query(
         `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, quantity, status) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new') RETURNING id`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new') RETURNING id, created_at`,
         [master.rows[0].id, session.data.customerName, session.data.phone, 
          session.data.address, session.data.lat, session.data.lng,
          session.data.product, session.data.quantity]
@@ -556,15 +563,41 @@ bot.on('message:text', async (ctx) => {
       
       if (ADMIN_CHAT_ID) {
         try {
+          const orderDate = orderResult.rows[0].created_at.toLocaleString('uz-UZ', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          
+          const locationInfo = session.data.lat && session.data.lng 
+            ? `📍 GPS: ${session.data.lat}, ${session.data.lng}\n` 
+            : '';
+          
           await bot.api.sendMessage(
             ADMIN_CHAT_ID,
-            `🆕 Yangi buyurtma #${orderResult.rows[0].id}\n\n` +
-            `Usta: ${master.rows[0].name}\n` +
-            `Mijoz: ${session.data.customerName}\n` +
-            `Telefon: ${session.data.phone}\n` +
-            `Manzil: ${session.data.address}\n` +
-            `Mahsulot: ${session.data.product}\n` +
-            `Miqdor: ${session.data.quantity}`
+            `🆕 Yangi buyurtma yaratildi:\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📋 Buyurtma ID: #${orderResult.rows[0].id}\n` +
+            `📅 Sana: ${orderDate}\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `👷 USTA MA'LUMOTLARI:\n` +
+            `   Ism: ${master.rows[0].name}\n` +
+            `   Tel: ${master.rows[0].master_phone || 'Kiritilmagan'}\n` +
+            `   Viloyat: ${master.rows[0].region || 'Kiritilmagan'}\n\n` +
+            `👤 MIJOZ MA'LUMOTLARI:\n` +
+            `   Ism: ${session.data.customerName}\n` +
+            `   Tel: ${session.data.phone}\n` +
+            `   Manzil: ${session.data.address}\n` +
+            `${locationInfo}\n` +
+            `📦 BUYURTMA TAFSILOTLARI:\n` +
+            `   Mahsulot: ${session.data.product}\n` +
+            `   Miqdor: ${session.data.quantity} dona\n` +
+            `   Narx: ${productPrice} so'm/dona\n` +
+            `   Jami: ${totalPrice} so'm\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📊 Holat: 🆕 Yangi`
           );
         } catch (adminError) {
           console.error('Failed to notify admin:', adminError);

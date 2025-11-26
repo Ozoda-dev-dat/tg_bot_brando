@@ -536,13 +536,6 @@ bot.on('message:text', async (ctx) => {
         [telegramId]
       );
       
-      const productInfo = await pool.query(
-        'SELECT price FROM warehouse WHERE name = $1',
-        [session.data.product]
-      );
-      const productPrice = productInfo.rows.length > 0 ? productInfo.rows[0].price : 0;
-      const totalPrice = productPrice * session.data.quantity;
-      
       const orderResult = await pool.query(
         `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, quantity, status) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new') RETURNING id, created_at`,
@@ -593,9 +586,7 @@ bot.on('message:text', async (ctx) => {
             `${locationInfo}\n` +
             `📦 BUYURTMA TAFSILOTLARI:\n` +
             `   Mahsulot: ${session.data.product}\n` +
-            `   Miqdor: ${session.data.quantity} dona\n` +
-            `   Narx: ${productPrice} so'm/dona\n` +
-            `   Jami: ${totalPrice} so'm\n\n` +
+            `   Miqdor: ${session.data.quantity} dona\n\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `📊 Holat: 🆕 Yangi`
           );

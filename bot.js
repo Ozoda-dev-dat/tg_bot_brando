@@ -27,7 +27,8 @@ function isAdmin(userId) {
 function getMainMenu() {
   return new Keyboard()
     .text('+ Yangi yetkazish').row()
-    .text('Mening buyurtmalarim').text('Ombor')
+    .text('Mening buyurtmalarim').text('Ombor').row()
+    .text('📦 Mahsulot qo\'shish')
     .resized()
     .persistent();
 }
@@ -132,9 +133,30 @@ bot.hears('Mening buyurtmalarim', async (ctx) => {
 
 bot.hears(['Ombor', '📦 Ombor'], async (ctx) => {
   try {
-    const products = await pool.query(
-      'SELECT name, quantity, price FROM warehouse ORDER BY name'
-    );
+    const telegramId = ctx.from.id;
+    let products;
+    
+    if (isAdmin(telegramId)) {
+      products = await pool.query(
+        'SELECT name, quantity, price, region FROM warehouse ORDER BY region, name'
+      );
+    } else {
+      const master = await pool.query(
+        'SELECT region FROM masters WHERE telegram_id = $1',
+        [telegramId]
+      );
+      
+      if (master.rows.length > 0) {
+        products = await pool.query(
+          'SELECT name, quantity, price FROM warehouse WHERE region = $1 OR region IS NULL ORDER BY name',
+          [master.rows[0].region]
+        );
+      } else {
+        products = await pool.query(
+          'SELECT name, quantity, price FROM warehouse ORDER BY name'
+        );
+      }
+    }
     
     if (products.rows.length === 0) {
       return ctx.reply('Omborda mahsulot yo\'q');
@@ -142,10 +164,32 @@ bot.hears(['Ombor', '📦 Ombor'], async (ctx) => {
     
     let message = '📦 Ombor:\n\n';
     products.rows.forEach(product => {
-      message += `${product.name} - ${product.quantity} - $${product.price}\n`;
+      const regionText = product.region ? ` (${product.region})` : '';
+      message += `${product.name}${regionText} - ${product.quantity} dona - ${product.price} so'm\n`;
     });
     
     ctx.reply(message);
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('📦 Mahsulot qo\'shish', async (ctx) => {
+  try {
+    const telegramId = ctx.from.id;
+    const master = await pool.query(
+      'SELECT id, name, region FROM masters WHERE telegram_id = $1',
+      [telegramId]
+    );
+    
+    if (master.rows.length === 0) {
+      return ctx.reply('Siz ro\'yxatdan o\'tmagansiz. Adminga murojaat qiling.');
+    }
+    
+    const session = getSession(ctx.from.id);
+    session.step = 'master_product_name';
+    session.data = { masterRegion: master.rows[0].region };
+    ctx.reply(`📦 O'z viloyatingiz (${master.rows[0].region}) omboriga mahsulot qo'shish\n\nMahsulot nomini kiriting:`);
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
   }
@@ -372,6 +416,72 @@ bot.on('message:text', async (ctx) => {
         } else {
           ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
         }
+      }
+    } else if (session.step === 'master_product_name') {
+      session.data.productName = ctx.message.text;
+      session.step = 'master_product_quantity';
+      ctx.reply('Miqdorni kiriting (dona):');
+    } else if (session.step === 'master_product_quantity') {
+      const quantity = parseInt(ctx.message.text);
+      if (isNaN(quantity) || quantity < 0) {
+        return ctx.reply('Iltimos, to\'g\'ri miqdorni kiriting (0 yoki katta)');
+      }
+      session.data.productQuantity = quantity;
+      session.step = 'master_product_price';
+      ctx.reply('Narxni kiriting (so\'m):');
+    } else if (session.step === 'master_product_price') {
+      const price = parseFloat(ctx.message.text);
+      if (isNaN(price) || price < 0) {
+        return ctx.reply('Iltimos, to\'g\'ri narxni kiriting');
+      }
+      session.data.productPrice = price;
+      session.step = 'master_product_category';
+      ctx.reply('Kategoriyani kiriting (ixtiyoriy, o\'tkazish uchun "-" yozing):');
+    } else if (session.step === 'master_product_category') {
+      session.data.productCategory = ctx.message.text === '-' ? null : ctx.message.text;
+      
+      try {
+        const existingProduct = await pool.query(
+          'SELECT id, quantity FROM warehouse WHERE name = $1 AND region = $2',
+          [session.data.productName, session.data.masterRegion]
+        );
+        
+        if (existingProduct.rows.length > 0) {
+          await pool.query(
+            'UPDATE warehouse SET quantity = quantity + $1, price = $2, category = COALESCE($3, category) WHERE id = $4',
+            [session.data.productQuantity, session.data.productPrice, session.data.productCategory, existingProduct.rows[0].id]
+          );
+          
+          ctx.reply(
+            `✅ Mahsulot yangilandi!\n\n` +
+            `Nomi: ${session.data.productName}\n` +
+            `Yangi miqdor: ${existingProduct.rows[0].quantity + session.data.productQuantity} dona\n` +
+            `Narx: ${session.data.productPrice} so'm\n` +
+            `Viloyat: ${session.data.masterRegion}`,
+            { reply_markup: getMainMenu() }
+          );
+        } else {
+          await pool.query(
+            'INSERT INTO warehouse (name, quantity, price, category, region) VALUES ($1, $2, $3, $4, $5)',
+            [session.data.productName, session.data.productQuantity, session.data.productPrice, 
+             session.data.productCategory, session.data.masterRegion]
+          );
+          
+          ctx.reply(
+            `✅ Yangi mahsulot qo'shildi!\n\n` +
+            `Nomi: ${session.data.productName}\n` +
+            `Miqdor: ${session.data.productQuantity} dona\n` +
+            `Narx: ${session.data.productPrice} so'm\n` +
+            `Kategoriya: ${session.data.productCategory || 'Yo\'q'}\n` +
+            `Viloyat: ${session.data.masterRegion}`,
+            { reply_markup: getMainMenu() }
+          );
+        }
+        
+        clearSession(ctx.from.id);
+      } catch (dbError) {
+        console.error('Database error:', dbError);
+        ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
       }
     } else if (session.step === 'customer_name') {
       session.data.customerName = ctx.message.text;

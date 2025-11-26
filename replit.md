@@ -23,11 +23,12 @@ Stores information about masters/workers
 ### 2. warehouse
 Inventory management table
 - id: Serial primary key
-- name: Unique text field for product name
+- name: Text field for product name
 - quantity: Integer with default 0
 - price: Numeric field for product price
 - category: Text field for product category
 - subcategory: Text field for product subcategory
+- region: Text field for regional warehouse assignment
 
 ### 3. clients
 Customer information table
@@ -89,6 +90,7 @@ The `/addmaster` command is still available as a fallback option.
 The bot displays a persistent keyboard with the following buttons (in Uzbek):
 - Row 1: `+ Yangi yetkazish` (+ New delivery)
 - Row 2: `Mening buyurtmalarim` (My orders) | `Ombor` (Stock)
+- Row 3: `📦 Mahsulot qo'shish` (Add Product)
 
 ### Menu Commands
 
@@ -103,10 +105,19 @@ Displays the last 10 orders for the current master showing:
 - Status
 
 #### Stock
-Shows all products in the warehouse with:
+Shows products in the master's regional warehouse with:
 - Product name
 - Current quantity
 - Price
+- Region (for admin view)
+
+#### Add Product (Masters)
+Masters can add products to their own regional warehouse:
+1. Enter product name
+2. Enter quantity
+3. Enter price (in so'm)
+4. Enter category (optional, use "-" to skip)
+If product already exists in the region, quantity is added to existing stock.
 
 ### Delivery Workflow
 1. **+ New Delivery** - Initiates new order
@@ -176,3 +187,6 @@ When a master clicks "Yo'ldaman" (I'm on my way), the bot automatically:
 - 2025-11-25: Added admin functionality - /addmaster command to create new masters/workers with proper authentication
 - 2025-11-25: Converted all admin functions to button-based interface (Add Master, Add Product, View Masters, View All Orders)
 - 2025-11-25: Created admin panel with persistent keyboard menu for easy navigation
+- 2025-11-26: Added regional warehouse feature - masters can now add products to their own region's warehouse
+- 2025-11-26: Added "📦 Mahsulot qo'shish" button to master's main menu
+- 2025-11-26: Warehouse view now shows only regional products for masters, all products for admin

@@ -8,11 +8,12 @@ CREATE TABLE masters (
 
 CREATE TABLE warehouse (
     id SERIAL PRIMARY KEY,
-    name TEXT UNIQUE,
+    name TEXT,
     quantity INT DEFAULT 0,
     price NUMERIC,
     category TEXT,
-    subcategory TEXT
+    subcategory TEXT,
+    region TEXT
 );
 
 CREATE TABLE clients (

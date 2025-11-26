@@ -520,21 +520,46 @@ bot.on('message:text', async (ctx) => {
       
       session.data.quantity = quantity;
       
-      const stock = await pool.query(
-        'SELECT quantity FROM warehouse WHERE name = $1',
-        [session.data.product]
-      );
-      
-      if (stock.rows.length === 0 || stock.rows[0].quantity < quantity) {
-        const available = stock.rows.length > 0 ? stock.rows[0].quantity : 0;
-        return ctx.reply(`Omborda yetarli emas. Mavjud: ${available}`);
-      }
-      
       const telegramId = ctx.from.id;
       const master = await pool.query(
         'SELECT id, name, phone as master_phone, region FROM masters WHERE telegram_id = $1',
         [telegramId]
       );
+      
+      const masterRegion = master.rows[0].region;
+      
+      const stock = await pool.query(
+        'SELECT quantity FROM warehouse WHERE name = $1 AND (region = $2 OR region IS NULL)',
+        [session.data.product, masterRegion]
+      );
+      
+      const available = stock.rows.length > 0 ? stock.rows[0].quantity : 0;
+      
+      if (stock.rows.length === 0 || available < quantity) {
+        const shortage = quantity - available;
+        
+        if (ADMIN_CHAT_ID) {
+          try {
+            await bot.api.sendMessage(
+              ADMIN_CHAT_ID,
+              `⚠️ OMBORDA MAHSULOT YETISHMAYAPTI!\n\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `📍 Viloyat: ${masterRegion || 'Noma\'lum'}\n` +
+              `👷 Usta: ${master.rows[0].name}\n` +
+              `📦 Mahsulot: ${session.data.product}\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n\n` +
+              `📊 Omborda mavjud: ${available} dona\n` +
+              `📋 Kerak: ${quantity} dona\n` +
+              `❗ Yetishmayapti: ${shortage} dona\n\n` +
+              `Iltimos, omborni to'ldiring!`
+            );
+          } catch (adminError) {
+            console.error('Failed to notify admin about shortage:', adminError);
+          }
+        }
+        
+        return ctx.reply(`Omborda yetarli emas. Mavjud: ${available} dona. Adminga xabar yuborildi.`);
+      }
       
       const orderResult = await pool.query(
         `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, quantity, status) 
@@ -544,7 +569,10 @@ bot.on('message:text', async (ctx) => {
          session.data.product, session.data.quantity]
       );
       
-      await pool.query('SELECT decrease_stock($1, $2)', [session.data.product, session.data.quantity]);
+      await pool.query(
+        'UPDATE warehouse SET quantity = quantity - $1 WHERE name = $2 AND (region = $3 OR region IS NULL)',
+        [session.data.quantity, session.data.product, masterRegion]
+      );
       
       session.data.orderId = orderResult.rows[0].id;
       session.step = 'on_way_pending';

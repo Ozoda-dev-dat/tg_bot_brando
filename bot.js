@@ -55,7 +55,7 @@ bot.command('start', async (ctx) => {
     );
     
     if (result.rows.length === 0) {
-      return ctx.reply('Malumotingiz topilmadi. Iltimos adminga aloqaga chiqing!);
+      return ctx.reply('Malumotingiz topilmadi. Iltimos adminga aloqaga chiqing!');
     }
 
     const master = result.rows[0];

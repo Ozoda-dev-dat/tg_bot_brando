@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS orders (
     spare_part_photo TEXT,
     completion_gps_lat DOUBLE PRECISION,
     completion_gps_lng DOUBLE PRECISION,
-    master_telegram_id BIGINT
+    master_telegram_id BIGINT,
+    barcode TEXT
 );
 
 CREATE OR REPLACE FUNCTION decrease_stock(p_name TEXT, p_qty INT)

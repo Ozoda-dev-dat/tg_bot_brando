@@ -9,6 +9,11 @@ A Telegram bot for delivery and warehouse management built with Grammy framework
 **Bot Framework:** Grammy
 
 ## Recent Changes
+- **2024-11-28:** Moved order creation to admin-only functionality
+  - Only admins can now create new delivery orders
+  - Admin must select a master (delivery person) when creating an order
+  - Works with both text address and GPS location input
+  - Fixed multi-admin notification system
 - **2024-11-28:** Initial project setup in Replit environment
   - Installed npm dependencies (dotenv, grammy, pg, xlsx)
   - Created PostgreSQL database and initialized schema
@@ -38,13 +43,13 @@ The bot uses 4 main tables:
 
 ### Key Features
 1. **Admin Functions**
+   - Create new deliveries/orders
    - Add masters (delivery personnel)
    - Add products to warehouse
    - Import products from Excel files
    - View all orders and masters
    
 2. **Master Functions**
-   - Create new deliveries
    - View personal orders
    - Check warehouse inventory (region-filtered)
    - Add products to their region's warehouse

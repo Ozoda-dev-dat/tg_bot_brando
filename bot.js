@@ -149,7 +149,6 @@ async function sendPhotoToAdmins(fileId, options = {}) {
 
 function getMainMenu() {
   return new Keyboard()
-    .text('+ Yangi yetkazish').row()
     .text('Mening buyurtmalarim').text('Ombor').row()
     .text('📦 Mahsulot qo\'shish')
     .resized()
@@ -158,6 +157,7 @@ function getMainMenu() {
 
 function getAdminMenu() {
   return new Keyboard()
+    .text('+ Yangi yetkazish').row()
     .text('➕ Usta qo\'shish').text('➕ Mahsulot qo\'shish').row()
     .text('📥 Excel import').text('📋 Barcha buyurtmalar').row()
     .text('👥 Barcha ustalar').text('📦 Ombor').row()
@@ -209,6 +209,10 @@ bot.command('addmaster', async (ctx) => {
 
 bot.hears('+ Yangi yetkazish', async (ctx) => {
   try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
     const session = getSession(ctx.from.id);
     session.step = 'customer_name';
     session.data = {};
@@ -460,11 +464,72 @@ bot.hears('🔙 Orqaga', async (ctx) => {
 bot.callbackQuery('new_delivery', async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
+    
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
     const session = getSession(ctx.from.id);
     session.step = 'customer_name';
     session.data = {};
     ctx.reply('Mijoz ismini kiriting:');
   } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^select_master:(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'select_master') {
+      return;
+    }
+    
+    const masterId = parseInt(ctx.match[1]);
+    const masterResult = await pool.query(
+      'SELECT id, name, phone, region, telegram_id FROM masters WHERE id = $1',
+      [masterId]
+    );
+    
+    if (masterResult.rows.length === 0) {
+      clearSession(ctx.from.id);
+      return ctx.reply('❌ Usta topilmadi.', { reply_markup: getAdminMenu() });
+    }
+    
+    const master = masterResult.rows[0];
+    session.data.selectedMasterId = master.id;
+    session.data.selectedMasterName = master.name;
+    session.data.selectedMasterPhone = master.phone;
+    session.data.selectedMasterRegion = master.region;
+    session.data.selectedMasterTelegramId = master.telegram_id;
+    session.data.masterRegion = master.region;
+    
+    session.step = 'product';
+    session.data.productPage = 0;
+    
+    const products = await pool.query(
+      'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
+      [master.region]
+    );
+    
+    if (products.rows.length > 0) {
+      const pageSize = 8;
+      const keyboard = new InlineKeyboard();
+      products.rows.slice(0, pageSize).forEach(p => {
+        keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
+      });
+      if (products.rows.length > pageSize) {
+        keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+      }
+      ctx.reply(`👷 Tanlangan usta: ${master.name}\n\n📦 Mahsulotni tanlang:`, { reply_markup: keyboard });
+    } else {
+      clearSession(ctx.from.id);
+      ctx.reply('❌ Omborda mahsulot yo\'q.', { reply_markup: getAdminMenu() });
+    }
+  } catch (error) {
+    console.error('Select master callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -657,35 +722,55 @@ bot.on('message:text', async (ctx) => {
       session.data.address = ctx.message.text;
       session.data.lat = null;
       session.data.lng = null;
-      session.step = 'product';
-      session.data.productPage = 0;
       
       const telegramId = ctx.from.id;
-      const masterResult = await pool.query(
-        'SELECT region FROM masters WHERE telegram_id = $1',
-        [telegramId]
-      );
-      const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
-      session.data.masterRegion = masterRegion;
       
-      const products = await pool.query(
-        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
-        [masterRegion]
-      );
-      
-      if (products.rows.length > 0) {
-        const pageSize = 8;
-        const keyboard = new InlineKeyboard();
-        products.rows.slice(0, pageSize).forEach(p => {
-          keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
-        });
-        if (products.rows.length > pageSize) {
-          keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+      if (isAdmin(telegramId)) {
+        session.step = 'select_master';
+        const masters = await pool.query(
+          'SELECT id, name, region FROM masters ORDER BY region, name'
+        );
+        
+        if (masters.rows.length === 0) {
+          clearSession(ctx.from.id);
+          return ctx.reply('❌ Ustalar topilmadi. Avval usta qo\'shing.', { reply_markup: getAdminMenu() });
         }
-        ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
+        
+        const keyboard = new InlineKeyboard();
+        masters.rows.forEach(m => {
+          keyboard.text(`${m.name} (${m.region || 'Hudud yo\'q'})`, `select_master:${m.id}`).row();
+        });
+        ctx.reply('👷 Usta tanlang:', { reply_markup: keyboard });
       } else {
-        clearSession(ctx.from.id);
-        ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
+        session.step = 'product';
+        session.data.productPage = 0;
+        
+        const masterResult = await pool.query(
+          'SELECT region FROM masters WHERE telegram_id = $1',
+          [telegramId]
+        );
+        const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
+        session.data.masterRegion = masterRegion;
+        
+        const products = await pool.query(
+          'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
+          [masterRegion]
+        );
+        
+        if (products.rows.length > 0) {
+          const pageSize = 8;
+          const keyboard = new InlineKeyboard();
+          products.rows.slice(0, pageSize).forEach(p => {
+            keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
+          });
+          if (products.rows.length > pageSize) {
+            keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+          }
+          ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
+        } else {
+          clearSession(ctx.from.id);
+          ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
+        }
       }
     } else if (session.step === 'quantity') {
       const quantity = parseInt(ctx.message.text);
@@ -696,17 +781,31 @@ bot.on('message:text', async (ctx) => {
       session.data.quantity = quantity;
       
       const telegramId = ctx.from.id;
-      const master = await pool.query(
-        'SELECT id, name, phone as master_phone, region FROM masters WHERE telegram_id = $1',
-        [telegramId]
-      );
+      let masterId, masterName, masterPhone, masterRegion, masterTelegramId;
       
-      if (master.rows.length === 0) {
-        clearSession(ctx.from.id);
-        return ctx.reply('Siz ro\'yxatdan o\'tmagansiz. Adminga murojaat qiling.');
+      if (session.data.selectedMasterId) {
+        masterId = session.data.selectedMasterId;
+        masterName = session.data.selectedMasterName;
+        masterPhone = session.data.selectedMasterPhone;
+        masterRegion = session.data.selectedMasterRegion;
+        masterTelegramId = session.data.selectedMasterTelegramId;
+      } else {
+        const master = await pool.query(
+          'SELECT id, name, phone, region, telegram_id FROM masters WHERE telegram_id = $1',
+          [telegramId]
+        );
+        
+        if (master.rows.length === 0) {
+          clearSession(ctx.from.id);
+          return ctx.reply('Siz ro\'yxatdan o\'tmagansiz. Adminga murojaat qiling.');
+        }
+        
+        masterId = master.rows[0].id;
+        masterName = master.rows[0].name;
+        masterPhone = master.rows[0].phone;
+        masterRegion = master.rows[0].region;
+        masterTelegramId = master.rows[0].telegram_id;
       }
-      
-      const masterRegion = master.rows[0].region;
       
       const stock = await pool.query(
         `SELECT id, quantity, region FROM warehouse 
@@ -727,7 +826,7 @@ bot.on('message:text', async (ctx) => {
             `⚠️ OMBORDA MAHSULOT YETISHMAYAPTI!\n\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `📍 Viloyat: ${masterRegion || 'Noma\'lum'}\n` +
-            `👷 Usta: ${master.rows[0].name}\n` +
+            `👷 Usta: ${masterName}\n` +
             `📦 Mahsulot: ${session.data.product}\n` +
             `━━━━━━━━━━━━━━━━━━━━\n\n` +
             `📊 Omborda mavjud: ${available} dona\n` +
@@ -740,15 +839,16 @@ bot.on('message:text', async (ctx) => {
         }
         
         clearSession(ctx.from.id);
-        return ctx.reply(`Omborda yetarli emas. Mavjud: ${available} dona. Adminga xabar yuborildi.`, { reply_markup: getMainMenu() });
+        const replyMenu = isAdmin(telegramId) ? getAdminMenu() : getMainMenu();
+        return ctx.reply(`Omborda yetarli emas. Mavjud: ${available} dona. Adminga xabar yuborildi.`, { reply_markup: replyMenu });
       }
       
       const orderResult = await pool.query(
         `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, quantity, status, master_telegram_id) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', $9) RETURNING id, created_at`,
-        [master.rows[0].id, session.data.customerName, session.data.phone, 
+        [masterId, session.data.customerName, session.data.phone, 
          session.data.address, session.data.lat, session.data.lng,
-         session.data.product, session.data.quantity, telegramId]
+         session.data.product, session.data.quantity, masterTelegramId]
       );
       
       await pool.query(
@@ -757,12 +857,18 @@ bot.on('message:text', async (ctx) => {
       );
       
       session.data.orderId = orderResult.rows[0].id;
-      session.step = 'on_way_pending';
       
-      const keyboard = new InlineKeyboard()
-        .text('Yo\'ldaman', `on_way:${session.data.orderId}`);
-      
-      ctx.reply('Buyurtma yaratildi!', { reply_markup: keyboard });
+      if (isAdmin(telegramId)) {
+        clearSession(ctx.from.id);
+        ctx.reply(`✅ Buyurtma yaratildi!\n\n📋 Buyurtma ID: #${orderResult.rows[0].id}\n👷 Usta: ${masterName}\n📦 Mahsulot: ${session.data.product}\n📊 Miqdor: ${session.data.quantity} dona`, { reply_markup: getAdminMenu() });
+      } else {
+        session.step = 'on_way_pending';
+        
+        const keyboard = new InlineKeyboard()
+          .text('Yo\'ldaman', `on_way:${session.data.orderId}`);
+        
+        ctx.reply('Buyurtma yaratildi!', { reply_markup: keyboard });
+      }
       
       try {
         const orderDate = orderResult.rows[0].created_at.toLocaleString('uz-UZ', {
@@ -784,9 +890,9 @@ bot.on('message:text', async (ctx) => {
           `📅 Sana: ${orderDate}\n` +
           `━━━━━━━━━━━━━━━━━━━━\n\n` +
           `👷 USTA MA'LUMOTLARI:\n` +
-          `   Ism: ${master.rows[0].name}\n` +
-          `   Tel: ${master.rows[0].master_phone || 'Kiritilmagan'}\n` +
-          `   Viloyat: ${master.rows[0].region || 'Kiritilmagan'}\n\n` +
+          `   Ism: ${masterName}\n` +
+          `   Tel: ${masterPhone || 'Kiritilmagan'}\n` +
+          `   Viloyat: ${masterRegion || 'Kiritilmagan'}\n\n` +
           `👤 MIJOZ MA'LUMOTLARI:\n` +
           `   Ism: ${session.data.customerName}\n` +
           `   Tel: ${session.data.phone}\n` +
@@ -827,35 +933,55 @@ bot.on('message:location', async (ctx) => {
       session.data.address = 'Joylashuv';
       session.data.lat = ctx.message.location.latitude;
       session.data.lng = ctx.message.location.longitude;
-      session.step = 'product';
-      session.data.productPage = 0;
       
       const telegramId = ctx.from.id;
-      const masterResult = await pool.query(
-        'SELECT region FROM masters WHERE telegram_id = $1',
-        [telegramId]
-      );
-      const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
-      session.data.masterRegion = masterRegion;
       
-      const products = await pool.query(
-        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
-        [masterRegion]
-      );
-      
-      if (products.rows.length > 0) {
-        const pageSize = 8;
-        const keyboard = new InlineKeyboard();
-        products.rows.slice(0, pageSize).forEach(p => {
-          keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
-        });
-        if (products.rows.length > pageSize) {
-          keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+      if (isAdmin(telegramId)) {
+        session.step = 'select_master';
+        const masters = await pool.query(
+          'SELECT id, name, region FROM masters ORDER BY region, name'
+        );
+        
+        if (masters.rows.length === 0) {
+          clearSession(ctx.from.id);
+          return ctx.reply('❌ Ustalar topilmadi. Avval usta qo\'shing.', { reply_markup: getAdminMenu() });
         }
-        ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
+        
+        const keyboard = new InlineKeyboard();
+        masters.rows.forEach(m => {
+          keyboard.text(`${m.name} (${m.region || 'Hudud yo\'q'})`, `select_master:${m.id}`).row();
+        });
+        ctx.reply('👷 Usta tanlang:', { reply_markup: keyboard });
       } else {
-        clearSession(ctx.from.id);
-        ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
+        session.step = 'product';
+        session.data.productPage = 0;
+        
+        const masterResult = await pool.query(
+          'SELECT region FROM masters WHERE telegram_id = $1',
+          [telegramId]
+        );
+        const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
+        session.data.masterRegion = masterRegion;
+        
+        const products = await pool.query(
+          'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
+          [masterRegion]
+        );
+        
+        if (products.rows.length > 0) {
+          const pageSize = 8;
+          const keyboard = new InlineKeyboard();
+          products.rows.slice(0, pageSize).forEach(p => {
+            keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
+          });
+          if (products.rows.length > pageSize) {
+            keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+          }
+          ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
+        } else {
+          clearSession(ctx.from.id);
+          ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
+        }
       }
     } else if (session.step === 'master_gps') {
       const masterLat = ctx.message.location.latitude;

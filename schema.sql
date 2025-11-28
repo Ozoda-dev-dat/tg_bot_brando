@@ -3,7 +3,10 @@ CREATE TABLE IF NOT EXISTS masters (
     name TEXT,
     phone TEXT UNIQUE,
     telegram_id BIGINT UNIQUE,
-    region TEXT
+    region TEXT,
+    last_lat DOUBLE PRECISION,
+    last_lng DOUBLE PRECISION,
+    last_location_update TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS warehouse (

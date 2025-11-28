@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { Bot, InlineKeyboard, Keyboard } = require('grammy');
 const { Pool } = require('pg');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 const https = require('https');
 const http = require('http');
 

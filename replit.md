@@ -59,6 +59,13 @@ The bot uses PostgreSQL with 4 main tables:
 - **Telegram Bot**: Runs `npm start` which validates environment variables, sets up database schema if needed, and starts the bot
 
 ## Recent Changes
+- **2025-11-28**: Added category/subcategory selection for region input
+  - When adding a new master, region selection now uses inline keyboards
+  - First select a viloyat (province) from a list of 14 regions
+  - Then select a tuman (district) from subcategories
+  - Includes "Orqaga" (back) button to go back to category selection
+  - All Uzbekistan regions and their districts are predefined
+  
 - **2025-11-28**: Initial import and Replit environment setup
   - Installed Node.js dependencies (grammy, pg, dotenv, xlsx)
   - Configured PostgreSQL database

@@ -82,6 +82,30 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID
   ? process.env.ADMIN_CHAT_ID.split(",").map(id => id.trim())
   : [];
 
+const REGIONS = {
+  "Toshkent shahri": ["Bektemir", "Chilonzor", "Mirobod", "Mirzo Ulug'bek", "Olmazor", "Sergeli", "Shayxontohur", "Uchtepa", "Yakkasaroy", "Yunusobod", "Yashnobod"],
+  "Toshkent viloyati": ["Angren", "Bekobod", "Bo'ka", "Bo'stonliq", "Chinoz", "Chirchiq", "Ohangaron", "Olmaliq", "Oqqo'rg'on", "Parkent", "Piskent", "Qibray", "Quyi Chirchiq", "Toshkent", "Yangiyo'l", "Zangiota", "Yuqori Chirchiq"],
+  "Andijon viloyati": ["Andijon", "Asaka", "Baliqchi", "Bo'z", "Buloqboshi", "Izboskan", "Jalaquduq", "Xo'jaobod", "Marhamat", "Oltinko'l", "Paxtaobod", "Qo'rg'ontepa", "Shahrixon", "Ulug'nor", "Xonobod"],
+  "Buxoro viloyati": ["Buxoro", "G'ijduvon", "Jondor", "Kogon", "Olot", "Peshku", "Qorako'l", "Qorovulbozor", "Romitan", "Shofirkon", "Vobkent"],
+  "Farg'ona viloyati": ["Bag'dod", "Beshariq", "Buvayda", "Dang'ara", "Farg'ona", "Furqat", "Marg'ilon", "Oltiariq", "Quva", "Qo'qon", "Qo'shtepa", "Rishton", "So'x", "Toshloq", "Uchko'prik", "O'zbekiston", "Yozyovon"],
+  "Jizzax viloyati": ["Arnasoy", "Baxmal", "Do'stlik", "Forish", "G'allaorol", "Jizzax", "Mirzacho'l", "Paxtakor", "Sharof Rashidov", "Yangiobod", "Zafarobod", "Zarbdor", "Zomin"],
+  "Xorazm viloyati": ["Bog'ot", "Gurlan", "Xonqa", "Hazorasp", "Xiva", "Qo'shko'pir", "Shovot", "Urganch", "Yangiariq", "Yangibozor"],
+  "Namangan viloyati": ["Chortoq", "Chust", "Kosonsoy", "Mingbuloq", "Namangan", "Norin", "Pop", "To'raqo'rg'on", "Uchqo'rg'on", "Uychi", "Yangiqo'rg'on"],
+  "Navoiy viloyati": ["Karmana", "Konimex", "Navbahor", "Navoiy", "Nurota", "Qiziltepa", "Tomdi", "Uchquduq", "Xatirchi", "Zarafshon"],
+  "Qashqadaryo viloyati": ["Chiroqchi", "Dehqonobod", "G'uzor", "Kasbi", "Kitob", "Koson", "Mirishkor", "Muborak", "Nishon", "Qamashi", "Qarshi", "Shahrisabz", "Yakkabog'", "Ko'kdala"],
+  "Qoraqalpog'iston": ["Amudaryo", "Beruniy", "Chimboy", "Ellikqal'a", "Kegeyli", "Mo'ynoq", "Nukus", "Qanliko'l", "Qo'ng'irot", "Shumanay", "Taxtako'pir", "To'rtko'l", "Xo'jayli"],
+  "Samarqand viloyati": ["Bulung'ur", "Ishtixon", "Jomboy", "Kattaqo'rg'on", "Narpay", "Nurobod", "Oqdaryo", "Pastdarg'om", "Paxtachi", "Payariq", "Qo'shrabot", "Samarqand", "Tayloq", "Urgut"],
+  "Sirdaryo viloyati": ["Boyovut", "Guliston", "Mirzaobod", "Oqoltin", "Sardoba", "Sayxunobod", "Sirdaryo", "Xovos", "Yangiyer"],
+  "Surxondaryo viloyati": ["Angor", "Bandixon", "Boysun", "Denov", "Jarqo'rg'on", "Muzrabot", "Oltinsoy", "Qiziriq", "Qumqo'rg'on", "Sariosiyo", "Sherobod", "Sho'rchi", "Termiz", "Uzun"]
+};
+
+function getRegionCategories() {
+  return Object.keys(REGIONS);
+}
+
+function getSubcategories(category) {
+  return REGIONS[category] || [];
+}
 
 const sessions = new Map();
 const masterLocations = new Map();
@@ -761,6 +785,101 @@ bot.callbackQuery(/^select_master:(\d+)$/, async (ctx) => {
   }
 });
 
+bot.callbackQuery(/^region_cat:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'admin_master_region_category') {
+      return;
+    }
+    
+    const category = ctx.match[1];
+    session.data.regionCategory = category;
+    session.step = 'admin_master_region_subcategory';
+    
+    const subcategories = getSubcategories(category);
+    const keyboard = new InlineKeyboard();
+    
+    subcategories.forEach((sub, index) => {
+      keyboard.text(sub, `region_sub:${sub}`);
+      if ((index + 1) % 2 === 0) keyboard.row();
+    });
+    keyboard.row().text('🔙 Orqaga', 'region_back');
+    
+    await ctx.editMessageText(`📍 Viloyat: ${category}\n\n🏘 Tumanni tanlang:`, { reply_markup: keyboard });
+  } catch (error) {
+    console.error('Region category callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery('region_back', async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    session.step = 'admin_master_region_category';
+    delete session.data.regionCategory;
+    
+    const categories = getRegionCategories();
+    const keyboard = new InlineKeyboard();
+    categories.forEach((cat, index) => {
+      keyboard.text(cat, `region_cat:${cat}`);
+      if ((index + 1) % 2 === 0) keyboard.row();
+    });
+    
+    await ctx.editMessageText('📍 Viloyatni tanlang:', { reply_markup: keyboard });
+  } catch (error) {
+    console.error('Region back callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^region_sub:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'admin_master_region_subcategory') {
+      return;
+    }
+    
+    const subcategory = ctx.match[1];
+    const category = session.data.regionCategory;
+    const fullRegion = `${category}, ${subcategory}`;
+    session.data.masterRegion = fullRegion;
+    
+    try {
+      await pool.query(
+        'INSERT INTO masters (name, phone, telegram_id, region) VALUES ($1, $2, $3, $4)',
+        [session.data.masterName, session.data.masterPhone, session.data.masterTelegramId, fullRegion]
+      );
+      
+      await ctx.editMessageText(
+        `✅ Yangi usta qo'shildi!\n\n` +
+        `Ism: ${session.data.masterName}\n` +
+        `Telefon: ${session.data.masterPhone}\n` +
+        `Telegram ID: ${session.data.masterTelegramId}\n` +
+        `Hudud: ${fullRegion}`
+      );
+      
+      ctx.reply('Admin menyu:', { reply_markup: getAdminMenu() });
+      clearSession(ctx.from.id);
+    } catch (dbError) {
+      if (dbError.code === '23505') {
+        ctx.reply('Xatolik: Bu telefon yoki Telegram ID allaqachon mavjud', { reply_markup: getAdminMenu() });
+      } else {
+        ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik', { reply_markup: getAdminMenu() });
+      }
+      clearSession(ctx.from.id);
+    }
+  } catch (error) {
+    console.error('Region subcategory callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
 bot.on('message:text', async (ctx) => {
   try {
     const session = getSession(ctx.from.id);
@@ -779,34 +898,16 @@ bot.on('message:text', async (ctx) => {
         return ctx.reply('Iltimos, to\'g\'ri Telegram ID kiriting (raqam)');
       }
       session.data.masterTelegramId = telegramId;
-      session.step = 'admin_master_region';
-      ctx.reply('Hududni kiriting:');
-    } else if (session.step === 'admin_master_region') {
-      session.data.masterRegion = ctx.message.text;
+      session.step = 'admin_master_region_category';
       
-      try {
-        await pool.query(
-          'INSERT INTO masters (name, phone, telegram_id, region) VALUES ($1, $2, $3, $4)',
-          [session.data.masterName, session.data.masterPhone, session.data.masterTelegramId, session.data.masterRegion]
-        );
-        
-        ctx.reply(
-          `✅ Yangi usta qo'shildi!\n\n` +
-          `Ism: ${session.data.masterName}\n` +
-          `Telefon: ${session.data.masterPhone}\n` +
-          `Telegram ID: ${session.data.masterTelegramId}\n` +
-          `Hudud: ${session.data.masterRegion}`,
-          { reply_markup: getAdminMenu() }
-        );
-        
-        clearSession(ctx.from.id);
-      } catch (dbError) {
-        if (dbError.code === '23505') {
-          ctx.reply('Xatolik: Bu telefon yoki Telegram ID allaqachon mavjud');
-        } else {
-          ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
-        }
-      }
+      const categories = getRegionCategories();
+      const keyboard = new InlineKeyboard();
+      categories.forEach((cat, index) => {
+        keyboard.text(cat, `region_cat:${cat}`);
+        if ((index + 1) % 2 === 0) keyboard.row();
+      });
+      
+      ctx.reply('📍 Viloyatni tanlang:', { reply_markup: keyboard });
     } else if (session.step === 'admin_product_name') {
       session.data.productName = ctx.message.text;
       session.step = 'admin_product_quantity';

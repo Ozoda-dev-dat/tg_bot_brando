@@ -29,7 +29,7 @@ Backend Telegram Bot Application (No Frontend)
 
 ## Database Schema
 The bot uses 4 main tables:
-- **masters** - Delivery workers with regions
+- **masters** - Delivery workers with regions and location tracking (last_lat, last_lng, last_location_update)
 - **warehouse** - Product inventory with regional support
 - **orders** - Delivery orders with GPS tracking
 - **clients** - Customer information
@@ -60,7 +60,16 @@ All stored in Replit Secrets:
    - Location-based order notifications
    - Per-region inventory access
 
-4. **Admin Features**
+4. **Closest Master Assignment (NEW)**
+   - When orders are created with GPS location, the system automatically finds the closest master
+   - Uses Haversine formula to calculate distance between order location and master locations
+   - Master locations are stored in database and updated when they share location
+   - Only considers masters who shared location within last 24 hours
+   - If closest master is found, they receive direct notification with accept/reject buttons
+   - If no master has known location, falls back to notifying all masters in the region
+   - Masters can accept or reject orders; rejected orders are sent to the next closest master
+
+5. **Admin Features**
    - Add masters and products
    - View all orders and masters
    - Excel import for inventory
@@ -78,6 +87,7 @@ All stored in Replit Secrets:
 ✅ npm dependencies installed
 ✅ Workflow configured and running
 ✅ Bot successfully started and listening
+✅ Closest master assignment feature implemented
 
 ## Bot Commands
 - `/start` - Initialize bot (for masters and admins)
@@ -87,8 +97,16 @@ All stored in Replit Secrets:
 The bot runs continuously in the background. Users interact with it through Telegram:
 1. Masters can view assigned orders, check inventory, and add products to their region
 2. Admins can create orders, manage masters, and import inventory via Excel
+3. When creating an order with location, the closest available master is automatically notified
 
 ## Recent Changes
+- **2025-11-28**: Implemented closest master assignment feature
+  - Added location tracking columns to masters table (last_lat, last_lng, last_location_update)
+  - Added Haversine distance calculation function
+  - Modified order notification to find and notify closest master first
+  - Added accept/reject order callback handlers
+  - Master locations are saved to database when they share location
+
 - **2025-11-28**: Initial import and Replit environment setup
   - Created PostgreSQL database with full schema
   - Configured environment variables

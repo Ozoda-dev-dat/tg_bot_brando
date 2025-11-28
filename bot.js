@@ -149,16 +149,23 @@ function calculateDistance(lat1, lng1, lat2, lng2) {
   return R * c;
 }
 
-async function findClosestMaster(region, orderLat, orderLng) {
+async function findClosestMaster(region, orderLat, orderLng, excludeTelegramIds = []) {
   try {
-    const masters = await pool.query(
-      `SELECT id, telegram_id, name, phone, last_lat, last_lng, last_location_update 
+    let query = `SELECT id, telegram_id, name, phone, last_lat, last_lng, last_location_update 
        FROM masters 
        WHERE region = $1 AND last_lat IS NOT NULL AND last_lng IS NOT NULL 
-       AND last_location_update > NOW() - INTERVAL '24 hours'
-       ORDER BY last_location_update DESC`,
-      [region]
-    );
+       AND last_location_update > NOW() - INTERVAL '24 hours'`;
+    
+    const params = [region];
+    
+    if (excludeTelegramIds.length > 0) {
+      query += ` AND telegram_id NOT IN (${excludeTelegramIds.map((_, i) => `$${i + 2}`).join(', ')})`;
+      params.push(...excludeTelegramIds);
+    }
+    
+    query += ` ORDER BY last_location_update DESC`;
+    
+    const masters = await pool.query(query, params);
     
     if (masters.rows.length === 0) return null;
     
@@ -219,16 +226,61 @@ async function sendPhotoToAdmins(fileId, options = {}) {
 }
 
 const pendingOrderLocations = new Map();
+const rejectedOrderMasters = new Map();
 
-async function notifyRegionMastersForLocation(region, orderId, orderDetails) {
+async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orderLng, excludeTelegramIds = []) {
   try {
+    if (orderLat && orderLng) {
+      const closestMaster = await findClosestMaster(region, orderLat, orderLng, excludeTelegramIds);
+      
+      if (closestMaster) {
+        const distanceKm = closestMaster.distance.toFixed(2);
+        
+        try {
+          const acceptKeyboard = new InlineKeyboard()
+            .text('✅ Qabul qilish', `accept_order:${orderId}`)
+            .row()
+            .text('❌ Rad etish', `reject_order:${orderId}`);
+          
+          await bot.api.sendMessage(
+            closestMaster.telegram_id,
+            `🆕 YANGI BUYURTMA (Sizga eng yaqin!)\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📋 Buyurtma ID: #${orderId}\n` +
+            `👤 Mijoz: ${orderDetails.clientName}\n` +
+            `📦 Mahsulot: ${orderDetails.product}\n` +
+            `📍 Manzil: ${orderDetails.address}\n` +
+            `📏 Masofa: ~${distanceKm} km\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `⚡ Siz bu buyurtmaga eng yaqin ustasiz!\n` +
+            `Buyurtmani qabul qilasizmi?`,
+            { reply_markup: acceptKeyboard }
+          );
+          
+          await notifyAdmins(
+            `📍 Eng yaqin usta topildi!\n\n` +
+            `📋 Buyurtma ID: #${orderId}\n` +
+            `👷 Usta: ${closestMaster.name}\n` +
+            `📏 Masofa: ~${distanceKm} km\n` +
+            `📞 Tel: ${closestMaster.phone || 'Kiritilmagan'}\n\n` +
+            `Usta tasdiqlashini kutmoqda...`
+          );
+          
+          return { success: true, closestMaster, distance: distanceKm };
+        } catch (error) {
+          console.error(`Failed to notify closest master ${closestMaster.telegram_id}:`, error);
+        }
+      }
+    }
+    
     const masters = await pool.query(
       'SELECT telegram_id, name FROM masters WHERE region = $1',
       [region]
     );
     
-    if (masters.rows.length === 0) return;
+    if (masters.rows.length === 0) return { success: false, reason: 'no_masters' };
     
+    let notified = 0;
     for (const master of masters.rows) {
       if (!master.telegram_id) continue;
       
@@ -255,12 +307,16 @@ async function notifyRegionMastersForLocation(region, orderId, orderDetails) {
           `⚡ Buyurtmani qabul qilish uchun joylashuvingizni yuboring:`,
           { reply_markup: locationKeyboard }
         );
+        notified++;
       } catch (error) {
         console.error(`Failed to notify master ${master.telegram_id}:`, error);
       }
     }
+    
+    return { success: true, notifiedCount: notified, fallback: true };
   } catch (error) {
-    console.error('Error notifying region masters:', error);
+    console.error('Error notifying masters:', error);
+    return { success: false, error };
   }
 }
 
@@ -1062,14 +1118,19 @@ bot.on('message:text', async (ctx) => {
         clearSession(ctx.from.id);
         
         const barcodeInfo = session.data.barcode ? `\n📊 Shtrix kod: ${session.data.barcode}` : '';
-        ctx.reply(`✅ Buyurtma yaratildi!\n\n📋 Buyurtma ID: #${orderResult.rows[0].id}\n👷 Usta: ${masterName}\n📦 Mahsulot: ${session.data.product}\n📊 Miqdor: ${session.data.quantity} dona${barcodeInfo}\n\n📍 Barcha ${masterRegion} ustalariga joylashuv so'rovi yuborildi!`, { reply_markup: getAdminMenu() });
         
-        await notifyRegionMastersForLocation(masterRegion, orderResult.rows[0].id, {
+        const notifyResult = await notifyClosestMaster(masterRegion, orderResult.rows[0].id, {
           clientName: session.data.customerName,
           product: session.data.product,
           address: session.data.address,
           barcode: session.data.barcode
-        });
+        }, session.data.lat, session.data.lng);
+        
+        if (notifyResult.closestMaster) {
+          ctx.reply(`✅ Buyurtma yaratildi!\n\n📋 Buyurtma ID: #${orderResult.rows[0].id}\n👷 Tanlangan usta: ${masterName}\n📦 Mahsulot: ${session.data.product}\n📊 Miqdor: ${session.data.quantity} dona${barcodeInfo}\n\n📍 Eng yaqin usta (${notifyResult.closestMaster.name}, ~${notifyResult.distance} km) xabardor qilindi!`, { reply_markup: getAdminMenu() });
+        } else {
+          ctx.reply(`✅ Buyurtma yaratildi!\n\n📋 Buyurtma ID: #${orderResult.rows[0].id}\n👷 Usta: ${masterName}\n📦 Mahsulot: ${session.data.product}\n📊 Miqdor: ${session.data.quantity} dona${barcodeInfo}\n\n📍 Barcha ${masterRegion} ustalariga joylashuv so'rovi yuborildi!`, { reply_markup: getAdminMenu() });
+        }
       } else {
         session.step = 'on_way_pending';
         
@@ -1359,6 +1420,143 @@ bot.callbackQuery(/^product_next:(\d+)$/, async (ctx) => {
     await ctx.editMessageText(`📦 Mahsulotni tanlang (${page + 1}/${totalPages}):`, { reply_markup: keyboard });
   } catch (error) {
     console.error('Product pagination error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^accept_order:(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const orderId = ctx.match[1];
+    const telegramId = ctx.from.id;
+    
+    const master = await pool.query(
+      'SELECT id, name FROM masters WHERE telegram_id = $1',
+      [telegramId]
+    );
+    
+    if (master.rows.length === 0) {
+      return ctx.reply('Siz usta sifatida ro\'yxatdan o\'tmagansiz.');
+    }
+    
+    const order = await pool.query(
+      'SELECT id, status, master_id FROM orders WHERE id = $1',
+      [orderId]
+    );
+    
+    if (order.rows.length === 0) {
+      return ctx.reply('Buyurtma topilmadi.');
+    }
+    
+    if (order.rows[0].status !== 'new') {
+      return ctx.reply('Bu buyurtma allaqachon boshqa usta tomonidan qabul qilingan.');
+    }
+    
+    const updateResult = await pool.query(
+      `UPDATE orders SET master_id = $1, master_telegram_id = $2, status = 'accepted' 
+       WHERE id = $3 AND status = 'new' RETURNING id`,
+      [master.rows[0].id, telegramId, orderId]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return ctx.reply('Bu buyurtma allaqachon boshqa usta tomonidan qabul qilingan.');
+    }
+    
+    rejectedOrderMasters.delete(orderId);
+    
+    await notifyAdmins(
+      `✅ BUYURTMA QABUL QILINDI!\n\n` +
+      `📋 Buyurtma ID: #${orderId}\n` +
+      `👷 Usta: ${master.rows[0].name}\n` +
+      `⏰ Vaqt: ${new Date().toLocaleString('uz-UZ')}`
+    );
+    
+    const session = getSession(telegramId);
+    session.data.orderId = orderId;
+    session.step = 'on_way_pending';
+    
+    const keyboard = new InlineKeyboard()
+      .text('Yo\'ldaman', `on_way:${orderId}`);
+    
+    ctx.reply(
+      `✅ Buyurtma #${orderId} qabul qilindi!\n\n` +
+      `Yo'lga chiqsangiz "Yo'ldaman" tugmasini bosing.`,
+      { reply_markup: keyboard }
+    );
+  } catch (error) {
+    console.error('Accept order error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^reject_order:(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const orderId = ctx.match[1];
+    const telegramId = ctx.from.id;
+    
+    const master = await pool.query(
+      'SELECT name, region FROM masters WHERE telegram_id = $1',
+      [telegramId]
+    );
+    
+    if (master.rows.length === 0) {
+      return ctx.reply('Siz usta sifatida ro\'yxatdan o\'tmagansiz.');
+    }
+    
+    const order = await pool.query(
+      'SELECT id, client_name, product, address, lat, lng FROM orders WHERE id = $1 AND status = $2',
+      [orderId, 'new']
+    );
+    
+    if (order.rows.length === 0) {
+      return ctx.reply('Buyurtma topilmadi yoki allaqachon qabul qilingan.');
+    }
+    
+    if (!rejectedOrderMasters.has(orderId)) {
+      rejectedOrderMasters.set(orderId, []);
+    }
+    rejectedOrderMasters.get(orderId).push(telegramId);
+    
+    const excludedMasters = rejectedOrderMasters.get(orderId);
+    
+    await notifyAdmins(
+      `❌ BUYURTMA RAD ETILDI!\n\n` +
+      `📋 Buyurtma ID: #${orderId}\n` +
+      `👷 Usta: ${master.rows[0].name}\n` +
+      `⏰ Vaqt: ${new Date().toLocaleString('uz-UZ')}\n\n` +
+      `Keyingi eng yaqin ustaga xabar yuborilmoqda...`
+    );
+    
+    ctx.reply(
+      `❌ Buyurtma #${orderId} rad etildi.\n\n` +
+      `Keyingi eng yaqin ustaga xabar yuboriladi.`,
+      { reply_markup: getMainMenu() }
+    );
+    
+    const orderData = order.rows[0];
+    const notifyResult = await notifyClosestMaster(master.rows[0].region, orderId, {
+      clientName: orderData.client_name,
+      product: orderData.product,
+      address: orderData.address
+    }, orderData.lat, orderData.lng, excludedMasters);
+    
+    if (!notifyResult.closestMaster && notifyResult.fallback) {
+      await notifyAdmins(
+        `⚠️ Hech qanday yaqin usta topilmadi!\n\n` +
+        `📋 Buyurtma ID: #${orderId}\n` +
+        `Barcha viloyat ustalariga xabar yuborildi.`
+      );
+    } else if (!notifyResult.success) {
+      await notifyAdmins(
+        `⚠️ Ustalar topilmadi!\n\n` +
+        `📋 Buyurtma ID: #${orderId}\n` +
+        `Iltimos, buyurtmani qo'lda tayinlang.`
+      );
+    }
+    
+  } catch (error) {
+    console.error('Reject order error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });

@@ -1,11 +1,108 @@
 require('dotenv').config();
 const { Bot, InlineKeyboard, Keyboard } = require('grammy');
 const { Pool } = require('pg');
+const XLSX = require('xlsx');
+const https = require('https');
+const http = require('http');
+
 
 const bot = new Bot(process.env.BOT_TOKEN);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
+
+
+async function downloadFile(url) {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith('https') ? https : http;
+    protocol.get(url, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve(Buffer.concat(chunks)));
+      response.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+async function importProductsFromExcel(buffer, region = null) {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const data = XLSX.utils.sheet_to_json(sheet);
+  
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
+  let errors = [];
+  
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const rowNum = i + 2;
+    
+    try {
+      const name = row['Nomi'] || row['name'] || row['Name'] || row['Mahsulot'] || row['Product'] || 
+                   row['Product/Display Name'] || row['Mahsulot nomi'] || row['Product Name'];
+      
+      if (!name || String(name).trim() === '') {
+        skipped++;
+        errors.push(`Qator ${rowNum}: Mahsulot nomi bo'sh`);
+        continue;
+      }
+      
+      const rawQuantity = row['Miqdor'] || row['quantity'] || row['Quantity'] || row['Soni'] || 
+                          row['Product/Quantity On Hand'] || row['Quantity On Hand'] || 0;
+      const rawPrice = row['Narx'] || row['price'] || row['Price'] || row['Narxi'] || 
+                       row['Product/Sales Price'] || row['Sales Price'] || 0;
+      
+      let quantity = parseInt(rawQuantity);
+      if (isNaN(quantity)) quantity = 0;
+      let price = parseFloat(rawPrice);
+      if (isNaN(price)) price = 0;
+      
+      if (quantity < 0) {
+        quantity = 0;
+      }
+      
+      if (price < 0) {
+        price = 0;
+      }
+      
+      const category = row['Kategoriya'] || row['category'] || row['Category'] || 
+                       row['Product Category/Display Name'] || row['Category/Display Name'] || null;
+      const productRegion = row['Viloyat'] || row['region'] || row['Region'] || row['Hudud'] || region;
+      
+      const existing = await pool.query(
+        'SELECT id FROM warehouse WHERE name = $1 AND (region = $2 OR (region IS NULL AND $2 IS NULL))',
+        [String(name).trim(), productRegion]
+      );
+      
+      if (existing.rows.length > 0) {
+        await pool.query(
+          'UPDATE warehouse SET quantity = $1, price = $2, category = COALESCE($3, category) WHERE id = $4',
+          [quantity, price, category, existing.rows[0].id]
+        );
+        updated++;
+      } else {
+        await pool.query(
+          'INSERT INTO warehouse (name, quantity, price, category, region) VALUES ($1, $2, $3, $4, $5)',
+          [String(name).trim(), quantity, price, category, productRegion]
+        );
+        imported++;
+      }
+    } catch (err) {
+      skipped++;
+      errors.push(`Qator ${rowNum}: ${err.message}`);
+    }
+  }
+  
+  return { imported, updated, skipped, errors, total: data.length };
+}
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID
+  ? process.env.ADMIN_USER_ID.split(",").map(id => id.trim())
+  : [];
+
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID
+  ? process.env.ADMIN_CHAT_ID.split(",").map(id => id.trim())
+  : [];
+
 
 const sessions = new Map();
 
@@ -36,8 +133,9 @@ function getMainMenu() {
 function getAdminMenu() {
   return new Keyboard()
     .text('➕ Usta qo\'shish').text('➕ Mahsulot qo\'shish').row()
-    .text('👥 Barcha ustalar').text('📋 Barcha buyurtmalar').row()
-    .text('📦 Ombor').text('🔙 Orqaga')
+    .text('📥 Excel import').text('📋 Barcha buyurtmalar').row()
+    .text('👥 Barcha ustalar').text('📦 Ombor').row()
+    .text('🔙 Orqaga')
     .resized()
     .persistent();
 }
@@ -222,6 +320,30 @@ bot.hears('➕ Mahsulot qo\'shish', async (ctx) => {
     session.step = 'admin_product_name';
     session.data = {};
     ctx.reply('Mahsulot nomini kiriting:');
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('📥 Excel import', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const session = getSession(ctx.from.id);
+    session.step = 'excel_import';
+    session.data = {};
+    ctx.reply(
+      '📥 Excel faylni yuklash\n\n' +
+      'Excel faylda quyidagi ustunlar bo\'lishi kerak:\n' +
+      '• Nomi (yoki Name/Mahsulot/Product)\n' +
+      '• Miqdor (yoki Quantity/Soni)\n' +
+      '• Narx (yoki Price/Narxi)\n' +
+      '• Kategoriya (ixtiyoriy)\n' +
+      '• Viloyat (ixtiyoriy)\n\n' +
+      '📎 Iltimos, Excel faylni (.xlsx, .xls) yuboring:'
+    );
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
   }
@@ -510,6 +632,7 @@ bot.on('message:text', async (ctx) => {
       session.data.lat = null;
       session.data.lng = null;
       session.step = 'product';
+      session.data.productPage = 0;
       
       const telegramId = ctx.from.id;
       const masterResult = await pool.query(
@@ -517,25 +640,27 @@ bot.on('message:text', async (ctx) => {
         [telegramId]
       );
       const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
+      session.data.masterRegion = masterRegion;
       
       const products = await pool.query(
-        'SELECT DISTINCT name FROM warehouse WHERE region = $1 OR region IS NULL ORDER BY name',
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
         [masterRegion]
       );
+      
       if (products.rows.length > 0) {
+        const pageSize = 8;
         const keyboard = new InlineKeyboard();
-        products.rows.slice(0, 10).forEach(p => {
-          keyboard.text(p.name, `product:${p.name}`).row();
+        products.rows.slice(0, pageSize).forEach(p => {
+          keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
         });
-        keyboard.text('Qo\'lda kiritish', 'product_manual');
-        ctx.reply('Mahsulotni tanlang yoki qo\'lda kiriting:', { reply_markup: keyboard });
+        if (products.rows.length > pageSize) {
+          keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+        }
+        ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
       } else {
-        ctx.reply('Mahsulot nomini kiriting:');
+        clearSession(ctx.from.id);
+        ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
       }
-    } else if (session.step === 'product' || session.step === 'product_manual') {
-      session.data.product = ctx.message.text;
-      session.step = 'quantity';
-      ctx.reply('Miqdorni kiriting:');
     } else if (session.step === 'quantity') {
       const quantity = parseInt(ctx.message.text);
       if (isNaN(quantity) || quantity <= 0) {
@@ -683,6 +808,7 @@ bot.on('message:location', async (ctx) => {
       session.data.lat = ctx.message.location.latitude;
       session.data.lng = ctx.message.location.longitude;
       session.step = 'product';
+      session.data.productPage = 0;
       
       const telegramId = ctx.from.id;
       const masterResult = await pool.query(
@@ -690,20 +816,26 @@ bot.on('message:location', async (ctx) => {
         [telegramId]
       );
       const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
+      session.data.masterRegion = masterRegion;
       
       const products = await pool.query(
-        'SELECT DISTINCT name FROM warehouse WHERE region = $1 OR region IS NULL ORDER BY name',
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
         [masterRegion]
       );
+      
       if (products.rows.length > 0) {
+        const pageSize = 8;
         const keyboard = new InlineKeyboard();
-        products.rows.slice(0, 10).forEach(p => {
-          keyboard.text(p.name, `product:${p.name}`).row();
+        products.rows.slice(0, pageSize).forEach(p => {
+          keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
         });
-        keyboard.text('Qo\'lda kiritish', 'product_manual');
-        ctx.reply('Mahsulotni tanlang yoki qo\'lda kiriting:', { reply_markup: keyboard });
+        if (products.rows.length > pageSize) {
+          keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+        }
+        ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
       } else {
-        ctx.reply('Mahsulot nomini kiriting:');
+        clearSession(ctx.from.id);
+        ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
       }
     } else if (session.step === 'master_gps') {
       const masterLat = ctx.message.location.latitude;
@@ -756,13 +888,52 @@ bot.callbackQuery(/^product:(.+)$/, async (ctx) => {
   }
 });
 
-bot.callbackQuery('product_manual', async (ctx) => {
+bot.callbackQuery(/^product_next:(\d+)$/, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     const session = getSession(ctx.from.id);
-    session.step = 'product_manual';
-    ctx.reply('Mahsulot nomini kiriting:');
+    const pageSize = 8;
+    
+    const products = await pool.query(
+      'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
+      [session.data.masterRegion]
+    );
+    
+    if (products.rows.length === 0) {
+      clearSession(ctx.from.id);
+      await ctx.editMessageText('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.');
+      return ctx.reply('Bosh menyu:', { reply_markup: getMainMenu() });
+    }
+    
+    const totalPages = Math.ceil(products.rows.length / pageSize);
+    let page = parseInt(ctx.match[1]);
+    
+    if (page < 0) page = 0;
+    if (page >= totalPages) page = totalPages - 1;
+    
+    const start = page * pageSize;
+    const end = start + pageSize;
+    const pageProducts = products.rows.slice(start, end);
+    
+    const keyboard = new InlineKeyboard();
+    
+    pageProducts.forEach(p => {
+      keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
+    });
+    
+    if (page > 0) {
+      keyboard.text('⬅️ Oldingi', `product_next:${page - 1}`);
+    }
+    if (end < products.rows.length) {
+      keyboard.text('➡️ Keyingisi', `product_next:${page + 1}`);
+    }
+    if (page > 0 || end < products.rows.length) {
+      keyboard.row();
+    }
+    
+    await ctx.editMessageText(`📦 Mahsulotni tanlang (${page + 1}/${totalPages}):`, { reply_markup: keyboard });
   } catch (error) {
+    console.error('Product pagination error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -1003,6 +1174,60 @@ bot.callbackQuery(/^finish_order:(\d+)$/, async (ctx) => {
     }
   } catch (error) {
     console.error('Finish order callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.on('message:document', async (ctx) => {
+  try {
+    const session = getSession(ctx.from.id);
+    
+    if (session.step === 'excel_import') {
+      const document = ctx.message.document;
+      const fileName = document.file_name || '';
+      
+      if (!fileName.match(/\.(xlsx|xls)$/i)) {
+        return ctx.reply('❌ Faqat Excel fayl (.xlsx, .xls) yuborishingiz mumkin!');
+      }
+      
+      ctx.reply('⏳ Fayl yuklanmoqda va qayta ishlanmoqda...');
+      
+      try {
+        const file = await ctx.getFile();
+        const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+        const buffer = await downloadFile(fileUrl);
+        
+        const result = await importProductsFromExcel(buffer);
+        
+        let message = '📊 Excel import natijasi:\n\n';
+        message += `✅ Yangi qo'shildi: ${result.imported} ta\n`;
+        message += `🔄 Yangilandi: ${result.updated} ta\n`;
+        message += `📝 Jami qatorlar: ${result.total} ta\n`;
+        
+        if (result.skipped > 0) {
+          message += `\n⚠️ O'tkazib yuborildi: ${result.skipped} ta\n`;
+          const errorSample = result.errors.slice(0, 5);
+          if (errorSample.length > 0) {
+            message += '\nXatoliklar:\n';
+            errorSample.forEach(err => {
+              message += `• ${err}\n`;
+            });
+            if (result.errors.length > 5) {
+              message += `... va yana ${result.errors.length - 5} ta xatolik`;
+            }
+          }
+        }
+        
+        clearSession(ctx.from.id);
+        ctx.reply(message, { reply_markup: getAdminMenu() });
+      } catch (importError) {
+        console.error('Excel import error:', importError);
+        ctx.reply('❌ Excel faylni o\'qishda xatolik: ' + importError.message, { reply_markup: getAdminMenu() });
+        clearSession(ctx.from.id);
+      }
+    }
+  } catch (error) {
+    console.error('Document handler error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });

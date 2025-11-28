@@ -105,6 +105,7 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID
 
 
 const sessions = new Map();
+const masterLocations = new Map();
 
 function getSession(userId) {
   if (!sessions.has(userId)) {
@@ -115,6 +116,22 @@ function getSession(userId) {
 
 function clearSession(userId) {
   sessions.set(userId, { step: null, data: {} });
+}
+
+function hasMasterSharedLocation(userId) {
+  return masterLocations.has(userId);
+}
+
+function setMasterLocation(userId, lat, lng) {
+  masterLocations.set(userId, { lat, lng, timestamp: Date.now() });
+}
+
+function getMasterLocation(userId) {
+  return masterLocations.get(userId);
+}
+
+function clearMasterLocation(userId) {
+  masterLocations.delete(userId);
 }
 
 function isAdmin(userId) {
@@ -170,6 +187,7 @@ bot.command('start', async (ctx) => {
   try {
     const telegramId = ctx.from.id;
     clearSession(telegramId);
+    clearMasterLocation(telegramId);
     
     if (isAdmin(telegramId)) {
       return ctx.reply('Admin paneliga xush kelibsiz! 🔧', { reply_markup: getAdminMenu() });
@@ -185,7 +203,20 @@ bot.command('start', async (ctx) => {
     }
 
     const master = result.rows[0];
-    ctx.reply(`Xush kelibsiz ${master.name}!`, { reply_markup: getMainMenu() });
+    const session = getSession(telegramId);
+    session.step = 'awaiting_start_location';
+    session.data = { masterName: master.name };
+    
+    const locationKeyboard = new Keyboard()
+      .requestLocation('📍 Joylashuvni yuborish')
+      .resized()
+      .oneTime();
+    
+    ctx.reply(
+      `Xush kelibsiz ${master.name}!\n\n` +
+      `📍 Davom etish uchun joriy joylashuvingizni yuboring:`,
+      { reply_markup: locationKeyboard }
+    );
   } catch (error) {
     console.error('Start command error:', error);
     ctx.reply('Xatolik yuz berdi');
@@ -225,6 +256,22 @@ bot.hears('+ Yangi yetkazish', async (ctx) => {
 bot.hears('Mening buyurtmalarim', async (ctx) => {
   try {
     const telegramId = ctx.from.id;
+    
+    if (!isAdmin(telegramId) && !hasMasterSharedLocation(telegramId)) {
+      const locationKeyboard = new Keyboard()
+        .requestLocation('📍 Joylashuvni yuborish')
+        .resized()
+        .oneTime();
+      
+      const session = getSession(telegramId);
+      session.step = 'awaiting_start_location';
+      
+      return ctx.reply(
+        '⚠️ Avval joylashuvingizni yuboring!\n\n📍 Davom etish uchun joylashuvni yuboring:',
+        { reply_markup: locationKeyboard }
+      );
+    }
+    
     const master = await pool.query(
       'SELECT id FROM masters WHERE telegram_id = $1',
       [telegramId]
@@ -264,6 +311,22 @@ bot.hears('Mening buyurtmalarim', async (ctx) => {
 bot.hears(['Ombor', '📦 Ombor'], async (ctx) => {
   try {
     const telegramId = ctx.from.id;
+    
+    if (!isAdmin(telegramId) && !hasMasterSharedLocation(telegramId)) {
+      const locationKeyboard = new Keyboard()
+        .requestLocation('📍 Joylashuvni yuborish')
+        .resized()
+        .oneTime();
+      
+      const session = getSession(telegramId);
+      session.step = 'awaiting_start_location';
+      
+      return ctx.reply(
+        '⚠️ Avval joylashuvingizni yuboring!\n\n📍 Davom etish uchun joylashuvni yuboring:',
+        { reply_markup: locationKeyboard }
+      );
+    }
+    
     let products;
     
     if (isAdmin(telegramId)) {
@@ -307,6 +370,22 @@ bot.hears(['Ombor', '📦 Ombor'], async (ctx) => {
 bot.hears('📦 Mahsulot qo\'shish', async (ctx) => {
   try {
     const telegramId = ctx.from.id;
+    
+    if (!isAdmin(telegramId) && !hasMasterSharedLocation(telegramId)) {
+      const locationKeyboard = new Keyboard()
+        .requestLocation('📍 Joylashuvni yuborish')
+        .resized()
+        .oneTime();
+      
+      const session = getSession(telegramId);
+      session.step = 'awaiting_start_location';
+      
+      return ctx.reply(
+        '⚠️ Avval joylashuvingizni yuboring!\n\n📍 Davom etish uchun joylashuvni yuboring:',
+        { reply_markup: locationKeyboard }
+      );
+    }
+    
     const master = await pool.query(
       'SELECT id, name, region FROM masters WHERE telegram_id = $1',
       [telegramId]
@@ -443,13 +522,30 @@ bot.hears('📋 Barcha buyurtmalar', async (ctx) => {
 
 bot.hears('🔙 Orqaga', async (ctx) => {
   try {
-    if (isAdmin(ctx.from.id)) {
+    const telegramId = ctx.from.id;
+    
+    if (isAdmin(telegramId)) {
       return ctx.reply('Admin paneliga xush kelibsiz! 🔧', { reply_markup: getAdminMenu() });
+    }
+    
+    if (!hasMasterSharedLocation(telegramId)) {
+      const locationKeyboard = new Keyboard()
+        .requestLocation('📍 Joylashuvni yuborish')
+        .resized()
+        .oneTime();
+      
+      const session = getSession(telegramId);
+      session.step = 'awaiting_start_location';
+      
+      return ctx.reply(
+        '⚠️ Avval joylashuvingizni yuboring!\n\n📍 Davom etish uchun joylashuvni yuboring:',
+        { reply_markup: locationKeyboard }
+      );
     }
     
     const result = await pool.query(
       'SELECT * FROM masters WHERE telegram_id = $1',
-      [ctx.from.id]
+      [telegramId]
     );
     
     if (result.rows.length > 0) {
@@ -929,6 +1025,24 @@ bot.on('message:contact', async (ctx) => {
 bot.on('message:location', async (ctx) => {
   try {
     const session = getSession(ctx.from.id);
+    
+    if (session.step === 'awaiting_start_location') {
+      const telegramId = ctx.from.id;
+      const lat = ctx.message.location.latitude;
+      const lng = ctx.message.location.longitude;
+      
+      setMasterLocation(telegramId, lat, lng);
+      clearSession(telegramId);
+      
+      ctx.reply(
+        `✅ Joylashuv qabul qilindi!\n\n` +
+        `📍 Koordinatalar: ${lat.toFixed(6)}, ${lng.toFixed(6)}\n\n` +
+        `Endi botdan foydalanishingiz mumkin.`,
+        { reply_markup: getMainMenu() }
+      );
+      return;
+    }
+    
     if (session.step === 'address') {
       session.data.address = 'Joylashuv';
       session.data.lat = ctx.message.location.latitude;

@@ -10,6 +10,12 @@ A comprehensive Telegram bot for managing delivery operations, built with Grammy
 - **Dependencies**: dotenv, grammy, pg, xlsx
 
 ## Recent Changes
+**November 28, 2025** - Location requirement for masters
+- Masters must now share their location every time they start the bot
+- Bot will not show the main menu until location is shared
+- All master features check for location before allowing access
+- Location is stored in memory and cleared on each /start command
+
 **November 28, 2025** - Initial Replit setup
 - Configured PostgreSQL database with automatic schema creation
 - Set up required environment secrets (BOT_TOKEN, ADMIN_CHAT_ID, ADMIN_USER_ID)

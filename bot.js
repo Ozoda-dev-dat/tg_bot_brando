@@ -126,6 +126,60 @@ function setMasterLocation(userId, lat, lng) {
   masterLocations.set(userId, { lat, lng, timestamp: Date.now() });
 }
 
+async function saveMasterLocationToDb(telegramId, lat, lng) {
+  try {
+    await pool.query(
+      'UPDATE masters SET last_lat = $1, last_lng = $2, last_location_update = NOW() WHERE telegram_id = $3',
+      [lat, lng, telegramId]
+    );
+  } catch (error) {
+    console.error('Failed to save master location to DB:', error);
+  }
+}
+
+function calculateDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+async function findClosestMaster(region, orderLat, orderLng) {
+  try {
+    const masters = await pool.query(
+      `SELECT id, telegram_id, name, phone, last_lat, last_lng, last_location_update 
+       FROM masters 
+       WHERE region = $1 AND last_lat IS NOT NULL AND last_lng IS NOT NULL 
+       AND last_location_update > NOW() - INTERVAL '24 hours'
+       ORDER BY last_location_update DESC`,
+      [region]
+    );
+    
+    if (masters.rows.length === 0) return null;
+    
+    let closestMaster = null;
+    let minDistance = Infinity;
+    
+    for (const master of masters.rows) {
+      const distance = calculateDistance(orderLat, orderLng, master.last_lat, master.last_lng);
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestMaster = { ...master, distance };
+      }
+    }
+    
+    return closestMaster;
+  } catch (error) {
+    console.error('Error finding closest master:', error);
+    return null;
+  }
+}
+
 function getMasterLocation(userId) {
   return masterLocations.get(userId);
 }
@@ -1099,6 +1153,7 @@ bot.on('message:location', async (ctx) => {
       pendingOrderLocations.delete(telegramId);
       
       setMasterLocation(telegramId, lat, lng);
+      await saveMasterLocationToDb(telegramId, lat, lng);
       
       const master = await pool.query(
         'SELECT id, name FROM masters WHERE telegram_id = $1',
@@ -1137,6 +1192,7 @@ bot.on('message:location', async (ctx) => {
       const lng = ctx.message.location.longitude;
       
       setMasterLocation(telegramId, lat, lng);
+      await saveMasterLocationToDb(telegramId, lat, lng);
       clearSession(telegramId);
       
       ctx.reply(

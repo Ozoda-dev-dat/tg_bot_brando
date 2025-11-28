@@ -38,52 +38,31 @@ async function importProductsFromExcel(buffer, region = null) {
     const rowNum = i + 2;
     
     try {
-      const name = row['Nomi'] || row['name'] || row['Name'] || row['Mahsulot'] || row['Product'] || 
-                   row['Product/Display Name'] || row['Mahsulot nomi'] || row['Product Name'];
+      const model = row['MODEL'] || row['Model'] || row['model'];
+      const category = row['CATEGORY'] || row['Category'] || row['category'];
+      const subcategory = row['SUB CATEGORY'] || row['Sub Category'] || row['sub category'] || row['SUBCATEGORY'] || row['Subcategory'];
       
-      if (!name || String(name).trim() === '') {
+      if (!model || String(model).trim() === '') {
         skipped++;
-        errors.push(`Qator ${rowNum}: Mahsulot nomi bo'sh`);
+        errors.push(`Qator ${rowNum}: MODEL ustuni bo'sh`);
         continue;
       }
       
-      const rawQuantity = row['Miqdor'] || row['quantity'] || row['Quantity'] || row['Soni'] || 
-                          row['Product/Quantity On Hand'] || row['Quantity On Hand'] || 0;
-      const rawPrice = row['Narx'] || row['price'] || row['Price'] || row['Narxi'] || 
-                       row['Product/Sales Price'] || row['Sales Price'] || 0;
-      
-      let quantity = parseInt(rawQuantity);
-      if (isNaN(quantity)) quantity = 0;
-      let price = parseFloat(rawPrice);
-      if (isNaN(price)) price = 0;
-      
-      if (quantity < 0) {
-        quantity = 0;
-      }
-      
-      if (price < 0) {
-        price = 0;
-      }
-      
-      const category = row['Kategoriya'] || row['category'] || row['Category'] || 
-                       row['Product Category/Display Name'] || row['Category/Display Name'] || null;
-      const productRegion = row['Viloyat'] || row['region'] || row['Region'] || row['Hudud'] || region;
-      
       const existing = await pool.query(
         'SELECT id FROM warehouse WHERE name = $1 AND (region = $2 OR (region IS NULL AND $2 IS NULL))',
-        [String(name).trim(), productRegion]
+        [String(model).trim(), region]
       );
       
       if (existing.rows.length > 0) {
         await pool.query(
-          'UPDATE warehouse SET quantity = $1, price = $2, category = COALESCE($3, category) WHERE id = $4',
-          [quantity, price, category, existing.rows[0].id]
+          'UPDATE warehouse SET category = COALESCE($1, category), subcategory = COALESCE($2, subcategory) WHERE id = $3',
+          [category || null, subcategory || null, existing.rows[0].id]
         );
         updated++;
       } else {
         await pool.query(
-          'INSERT INTO warehouse (name, quantity, price, category, region) VALUES ($1, $2, $3, $4, $5)',
-          [String(name).trim(), quantity, price, category, productRegion]
+          'INSERT INTO warehouse (name, category, subcategory, region, quantity, price) VALUES ($1, $2, $3, $4, 0, 0)',
+          [String(model).trim(), category || null, subcategory || null, region]
         );
         imported++;
       }
@@ -597,17 +576,13 @@ bot.hears('📥 Excel import', async (ctx) => {
     }
     
     const session = getSession(ctx.from.id);
-    session.step = 'excel_import';
+    session.step = 'excel_region_select';
     session.data = {};
     ctx.reply(
-      '📥 Excel faylni yuklash\n\n' +
-      'Excel faylda quyidagi ustunlar bo\'lishi kerak:\n' +
-      '• Nomi (yoki Name/Mahsulot/Product)\n' +
-      '• Miqdor (yoki Quantity/Soni)\n' +
-      '• Narx (yoki Price/Narxi)\n' +
-      '• Kategoriya (ixtiyoriy)\n' +
-      '• Viloyat (ixtiyoriy)\n\n' +
-      '📎 Iltimos, Excel faylni (.xlsx, .xls) yuboring:'
+      '📥 Excel import\n\n' +
+      'Avval viloyatni tanlang yoki kiriting.\n' +
+      'Barcha viloyatlar uchun import qilish uchun "Hammasi" deb yozing.\n\n' +
+      '📍 Viloyat nomini kiriting:'
     );
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
@@ -884,6 +859,21 @@ bot.on('message:text', async (ctx) => {
           ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
         }
       }
+    } else if (session.step === 'excel_region_select') {
+      const regionInput = ctx.message.text.trim();
+      session.data.importRegion = regionInput.toLowerCase() === 'hammasi' ? null : regionInput;
+      session.step = 'excel_import';
+      
+      const regionText = session.data.importRegion ? session.data.importRegion : 'Barcha viloyatlar';
+      ctx.reply(
+        `📥 Excel faylni yuklash\n\n` +
+        `📍 Tanlangan viloyat: ${regionText}\n\n` +
+        `Excel faylda quyidagi ustunlar bo'lishi kerak:\n` +
+        `• CATEGORY\n` +
+        `• SUB CATEGORY\n` +
+        `• MODEL\n\n` +
+        `📎 Iltimos, Excel faylni (.xlsx, .xls) yuboring:`
+      );
     } else if (session.step === 'master_product_name') {
       session.data.productName = ctx.message.text;
       session.step = 'master_product_quantity';
@@ -1769,16 +1759,19 @@ bot.on('message:document', async (ctx) => {
         return ctx.reply('❌ Faqat Excel fayl (.xlsx, .xls) yuborishingiz mumkin!');
       }
       
-      ctx.reply('⏳ Fayl yuklanmoqda va qayta ishlanmoqda...');
+      const importRegion = session.data.importRegion || null;
+      const regionText = importRegion ? importRegion : 'Barcha viloyatlar';
+      ctx.reply(`⏳ Fayl yuklanmoqda va qayta ishlanmoqda...\n📍 Viloyat: ${regionText}`);
       
       try {
         const file = await ctx.getFile();
         const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
         const buffer = await downloadFile(fileUrl);
         
-        const result = await importProductsFromExcel(buffer);
+        const result = await importProductsFromExcel(buffer, importRegion);
         
         let message = '📊 Excel import natijasi:\n\n';
+        message += `📍 Viloyat: ${regionText}\n`;
         message += `✅ Yangi qo'shildi: ${result.imported} ta\n`;
         message += `🔄 Yangilandi: ${result.updated} ta\n`;
         message += `📝 Jami qatorlar: ${result.total} ta\n`;

@@ -50,19 +50,35 @@ The bot runs automatically via the configured workflow. It will:
 - **orders** - Order management with location and status tracking
 - **clients** - Client information
 
+## Excel Import Format
+The Excel import feature accepts files with **only 3 columns**:
+- **CATEGORY** - Product category
+- **SUB CATEGORY** - Product subcategory  
+- **MODEL** - Product model name (stored as product name)
+
+When importing:
+1. Admin first selects the target region (or "Hammasi" for all regions)
+2. Then uploads the Excel file (.xlsx or .xls)
+3. Products are imported/updated for the selected region
+
 ## Recent Changes
+- **2025-11-28**: Excel import format update
+  - Changed Excel columns to: CATEGORY, SUB CATEGORY, MODEL
+  - Added region selection before import
+  - Preserved existing quantity/price when updating products
 - **2025-11-28**: Initial Replit setup
   - Created .gitignore for Node.js
   - Configured workflow for bot execution
+  - Fixed syntax errors in bot.js (duplicate code)
   - Set up environment variable requirements
   - Added project documentation
 
 ## Current State
+- ✅ Bot running and fully configured
 - ✅ Node.js dependencies installed
 - ✅ Workflow configured
 - ✅ Database schema ready
-- ⏳ Waiting for environment variables (BOT_TOKEN, ADMIN_CHAT_ID, ADMIN_USER_ID)
-- ⏳ Waiting for PostgreSQL database creation
+- ✅ All environment variables set (BOT_TOKEN, ADMIN_CHAT_ID, ADMIN_USER_ID)
 
 ## Usage
 Once configured, users can:

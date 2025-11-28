@@ -118,7 +118,33 @@ function clearSession(userId) {
 }
 
 function isAdmin(userId) {
-  return ADMIN_USER_ID && userId === ADMIN_USER_ID;
+  return ADMIN_USER_ID && ADMIN_USER_ID.includes(String(userId));
+}
+
+async function notifyAdmins(message, options = {}) {
+  if (!ADMIN_CHAT_ID || ADMIN_CHAT_ID.length === 0) return;
+  
+  for (const chatId of ADMIN_CHAT_ID) {
+    if (!chatId) continue;
+    try {
+      await bot.api.sendMessage(chatId, message, options);
+    } catch (error) {
+      console.error(`Failed to notify admin ${chatId}:`, error);
+    }
+  }
+}
+
+async function sendPhotoToAdmins(fileId, options = {}) {
+  if (!ADMIN_CHAT_ID || ADMIN_CHAT_ID.length === 0) return;
+  
+  for (const chatId of ADMIN_CHAT_ID) {
+    if (!chatId) continue;
+    try {
+      await bot.api.sendPhoto(chatId, fileId, options);
+    } catch (error) {
+      console.error(`Failed to send photo to admin ${chatId}:`, error);
+    }
+  }
 }
 
 function getMainMenu() {
@@ -696,24 +722,21 @@ bot.on('message:text', async (ctx) => {
       if (stock.rows.length === 0 || available < quantity) {
         const shortage = quantity - available;
         
-        if (ADMIN_CHAT_ID) {
-          try {
-            await bot.api.sendMessage(
-              ADMIN_CHAT_ID,
-              `⚠️ OMBORDA MAHSULOT YETISHMAYAPTI!\n\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n` +
-              `📍 Viloyat: ${masterRegion || 'Noma\'lum'}\n` +
-              `👷 Usta: ${master.rows[0].name}\n` +
-              `📦 Mahsulot: ${session.data.product}\n` +
-              `━━━━━━━━━━━━━━━━━━━━\n\n` +
-              `📊 Omborda mavjud: ${available} dona\n` +
-              `📋 Kerak: ${quantity} dona\n` +
-              `❗ Yetishmayapti: ${shortage} dona\n\n` +
-              `Iltimos, omborni to'ldiring!`
-            );
-          } catch (adminError) {
-            console.error('Failed to notify admin about shortage:', adminError);
-          }
+        try {
+          await notifyAdmins(
+            `⚠️ OMBORDA MAHSULOT YETISHMAYAPTI!\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📍 Viloyat: ${masterRegion || 'Noma\'lum'}\n` +
+            `👷 Usta: ${master.rows[0].name}\n` +
+            `📦 Mahsulot: ${session.data.product}\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `📊 Omborda mavjud: ${available} dona\n` +
+            `📋 Kerak: ${quantity} dona\n` +
+            `❗ Yetishmayapti: ${shortage} dona\n\n` +
+            `Iltimos, omborni to'ldiring!`
+          );
+        } catch (adminError) {
+          console.error('Failed to notify admin about shortage:', adminError);
         }
         
         clearSession(ctx.from.id);
@@ -741,43 +764,40 @@ bot.on('message:text', async (ctx) => {
       
       ctx.reply('Buyurtma yaratildi!', { reply_markup: keyboard });
       
-      if (ADMIN_CHAT_ID) {
-        try {
-          const orderDate = orderResult.rows[0].created_at.toLocaleString('uz-UZ', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-          });
-          
-          const locationInfo = session.data.lat && session.data.lng 
-            ? `📍 GPS: ${session.data.lat}, ${session.data.lng}\n` 
-            : '';
-          
-          await bot.api.sendMessage(
-            ADMIN_CHAT_ID,
-            `🆕 Yangi buyurtma yaratildi:\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `📋 Buyurtma ID: #${orderResult.rows[0].id}\n` +
-            `📅 Sana: ${orderDate}\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `👷 USTA MA'LUMOTLARI:\n` +
-            `   Ism: ${master.rows[0].name}\n` +
-            `   Tel: ${master.rows[0].master_phone || 'Kiritilmagan'}\n` +
-            `   Viloyat: ${master.rows[0].region || 'Kiritilmagan'}\n\n` +
-            `👤 MIJOZ MA'LUMOTLARI:\n` +
-            `   Ism: ${session.data.customerName}\n` +
-            `   Tel: ${session.data.phone}\n` +
-            `   Manzil: ${session.data.address}\n` +
-            locationInfo + `\n` +
-            `📦 BUYURTMA:\n` +
-            `   Mahsulot: ${session.data.product}\n` +
-            `   Miqdor: ${session.data.quantity} dona`
-          );
-        } catch (adminError) {
-          console.error('Failed to notify admin:', adminError);
-        }
+      try {
+        const orderDate = orderResult.rows[0].created_at.toLocaleString('uz-UZ', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        
+        const locationInfo = session.data.lat && session.data.lng 
+          ? `📍 GPS: ${session.data.lat}, ${session.data.lng}\n` 
+          : '';
+        
+        await notifyAdmins(
+          `🆕 Yangi buyurtma yaratildi:\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `📋 Buyurtma ID: #${orderResult.rows[0].id}\n` +
+          `📅 Sana: ${orderDate}\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `👷 USTA MA'LUMOTLARI:\n` +
+          `   Ism: ${master.rows[0].name}\n` +
+          `   Tel: ${master.rows[0].master_phone || 'Kiritilmagan'}\n` +
+          `   Viloyat: ${master.rows[0].region || 'Kiritilmagan'}\n\n` +
+          `👤 MIJOZ MA'LUMOTLARI:\n` +
+          `   Ism: ${session.data.customerName}\n` +
+          `   Tel: ${session.data.phone}\n` +
+          `   Manzil: ${session.data.address}\n` +
+          locationInfo + `\n` +
+          `📦 BUYURTMA:\n` +
+          `   Mahsulot: ${session.data.product}\n` +
+          `   Miqdor: ${session.data.quantity} dona`
+        );
+      } catch (adminError) {
+        console.error('Failed to notify admin:', adminError);
       }
     }
   } catch (error) {
@@ -1142,35 +1162,32 @@ bot.callbackQuery(/^finish_order:(\d+)$/, async (ctx) => {
     
     ctx.reply('✅ Buyurtma muvaffaqiyatli yakunlandi!', { reply_markup: getMainMenu() });
     
-    if (ADMIN_CHAT_ID) {
-      try {
-        const orderDetails = await pool.query(
-          `SELECT o.*, m.name as master_name 
-           FROM orders o 
-           JOIN masters m ON o.master_id = m.id 
-           WHERE o.id = $1`,
-          [orderId]
-        );
+    try {
+      const orderDetails = await pool.query(
+        `SELECT o.*, m.name as master_name 
+         FROM orders o 
+         JOIN masters m ON o.master_id = m.id 
+         WHERE o.id = $1`,
+        [orderId]
+      );
+      
+      if (orderDetails.rows.length > 0) {
+        const od = orderDetails.rows[0];
+        const warrantyStatus = od.warranty_expired ? 'Tugagan' : 'Amal qilmoqda';
         
-        if (orderDetails.rows.length > 0) {
-          const od = orderDetails.rows[0];
-          const warrantyStatus = od.warranty_expired ? 'Tugagan' : 'Amal qilmoqda';
-          
-          await bot.api.sendMessage(
-            ADMIN_CHAT_ID,
-            `✅ BUYURTMA YAKUNLANDI!\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `📋 Buyurtma ID: #${orderId}\n` +
-            `👷 Usta: ${od.master_name}\n` +
-            `👤 Mijoz: ${od.client_name}\n` +
-            `📦 Mahsulot: ${od.product}\n` +
-            `🛡️ Kafolat: ${warrantyStatus}\n` +
-            `━━━━━━━━━━━━━━━━━━━━`
-          );
-        }
-      } catch (adminError) {
-        console.error('Failed to notify admin about completion:', adminError);
+        await notifyAdmins(
+          `✅ BUYURTMA YAKUNLANDI!\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `📋 Buyurtma ID: #${orderId}\n` +
+          `👷 Usta: ${od.master_name}\n` +
+          `👤 Mijoz: ${od.client_name}\n` +
+          `📦 Mahsulot: ${od.product}\n` +
+          `🛡️ Kafolat: ${warrantyStatus}\n` +
+          `━━━━━━━━━━━━━━━━━━━━`
+        );
       }
+    } catch (adminError) {
+      console.error('Failed to notify admin about completion:', adminError);
     }
   } catch (error) {
     console.error('Finish order callback error:', error);
@@ -1274,15 +1291,14 @@ bot.on('message:photo', async (ctx) => {
         [session.data.orderId]
       );
       
-      if (ADMIN_CHAT_ID && order.rows.length > 0) {
+      if (order.rows.length > 0) {
         const od = order.rows[0];
         
         try {
           const keyboard = new InlineKeyboard()
             .text('✅ Qabul qilish', `accept_spare_part:${session.data.orderId}`);
           
-          await bot.api.sendPhoto(
-            ADMIN_CHAT_ID,
+          await sendPhotoToAdmins(
             fileId,
             {
               caption: `📦 EHTIYOT QISM YUBORILDI!\n\n` +

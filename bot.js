@@ -164,6 +164,52 @@ async function sendPhotoToAdmins(fileId, options = {}) {
   }
 }
 
+const pendingOrderLocations = new Map();
+
+async function notifyRegionMastersForLocation(region, orderId, orderDetails) {
+  try {
+    const masters = await pool.query(
+      'SELECT telegram_id, name FROM masters WHERE region = $1',
+      [region]
+    );
+    
+    if (masters.rows.length === 0) return;
+    
+    for (const master of masters.rows) {
+      if (!master.telegram_id) continue;
+      
+      try {
+        pendingOrderLocations.set(master.telegram_id, {
+          orderId,
+          region,
+          orderDetails,
+          timestamp: Date.now()
+        });
+        
+        const locationKeyboard = new Keyboard()
+          .requestLocation('📍 Joylashuvni yuborish')
+          .resized()
+          .oneTime();
+        
+        await bot.api.sendMessage(
+          master.telegram_id,
+          `🆕 Yangi buyurtma!\n\n` +
+          `📋 Buyurtma ID: #${orderId}\n` +
+          `👤 Mijoz: ${orderDetails.clientName}\n` +
+          `📦 Mahsulot: ${orderDetails.product}\n` +
+          `📍 Manzil: ${orderDetails.address}\n\n` +
+          `⚡ Buyurtmani qabul qilish uchun joylashuvingizni yuboring:`,
+          { reply_markup: locationKeyboard }
+        );
+      } catch (error) {
+        console.error(`Failed to notify master ${master.telegram_id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error notifying region masters:', error);
+  }
+}
+
 function getMainMenu() {
   return new Keyboard()
     .text('Mening buyurtmalarim').text('Ombor').row()
@@ -868,6 +914,10 @@ bot.on('message:text', async (ctx) => {
           ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
         }
       }
+    } else if (session.step === 'barcode') {
+      session.data.barcode = ctx.message.text;
+      session.step = 'quantity';
+      ctx.reply('Miqdorni kiriting:');
     } else if (session.step === 'quantity') {
       const quantity = parseInt(ctx.message.text);
       if (isNaN(quantity) || quantity <= 0) {
@@ -940,11 +990,11 @@ bot.on('message:text', async (ctx) => {
       }
       
       const orderResult = await pool.query(
-        `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, quantity, status, master_telegram_id) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', $9) RETURNING id, created_at`,
+        `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, quantity, status, master_telegram_id, barcode) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10) RETURNING id, created_at`,
         [masterId, session.data.customerName, session.data.phone, 
          session.data.address, session.data.lat, session.data.lng,
-         session.data.product, session.data.quantity, masterTelegramId]
+         session.data.product, session.data.quantity, masterTelegramId, session.data.barcode || null]
       );
       
       await pool.query(
@@ -956,7 +1006,16 @@ bot.on('message:text', async (ctx) => {
       
       if (isAdmin(telegramId)) {
         clearSession(ctx.from.id);
-        ctx.reply(`✅ Buyurtma yaratildi!\n\n📋 Buyurtma ID: #${orderResult.rows[0].id}\n👷 Usta: ${masterName}\n📦 Mahsulot: ${session.data.product}\n📊 Miqdor: ${session.data.quantity} dona`, { reply_markup: getAdminMenu() });
+        
+        const barcodeInfo = session.data.barcode ? `\n📊 Shtrix kod: ${session.data.barcode}` : '';
+        ctx.reply(`✅ Buyurtma yaratildi!\n\n📋 Buyurtma ID: #${orderResult.rows[0].id}\n👷 Usta: ${masterName}\n📦 Mahsulot: ${session.data.product}\n📊 Miqdor: ${session.data.quantity} dona${barcodeInfo}\n\n📍 Barcha ${masterRegion} ustalariga joylashuv so'rovi yuborildi!`, { reply_markup: getAdminMenu() });
+        
+        await notifyRegionMastersForLocation(masterRegion, orderResult.rows[0].id, {
+          clientName: session.data.customerName,
+          product: session.data.product,
+          address: session.data.address,
+          barcode: session.data.barcode
+        });
       } else {
         session.step = 'on_way_pending';
         
@@ -979,6 +1038,10 @@ bot.on('message:text', async (ctx) => {
           ? `📍 GPS: ${session.data.lat}, ${session.data.lng}\n` 
           : '';
         
+        const barcodeAdminInfo = session.data.barcode 
+          ? `   📊 Shtrix kod: ${session.data.barcode}\n` 
+          : '';
+        
         await notifyAdmins(
           `🆕 Yangi buyurtma yaratildi:\n\n` +
           `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -996,7 +1059,8 @@ bot.on('message:text', async (ctx) => {
           locationInfo + `\n` +
           `📦 BUYURTMA:\n` +
           `   Mahsulot: ${session.data.product}\n` +
-          `   Miqdor: ${session.data.quantity} dona`
+          `   Miqdor: ${session.data.quantity} dona\n` +
+          barcodeAdminInfo
         );
       } catch (adminError) {
         console.error('Failed to notify admin:', adminError);
@@ -1025,9 +1089,50 @@ bot.on('message:contact', async (ctx) => {
 bot.on('message:location', async (ctx) => {
   try {
     const session = getSession(ctx.from.id);
+    const telegramId = ctx.from.id;
+    
+    if (pendingOrderLocations.has(telegramId) && !session.step) {
+      const pendingOrder = pendingOrderLocations.get(telegramId);
+      const lat = ctx.message.location.latitude;
+      const lng = ctx.message.location.longitude;
+      
+      pendingOrderLocations.delete(telegramId);
+      
+      setMasterLocation(telegramId, lat, lng);
+      
+      const master = await pool.query(
+        'SELECT id, name FROM masters WHERE telegram_id = $1',
+        [telegramId]
+      );
+      
+      if (master.rows.length > 0) {
+        try {
+          await notifyAdmins(
+            `📍 USTA JOYLASHUVNI YUBORDI!\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📋 Buyurtma ID: #${pendingOrder.orderId}\n` +
+            `👷 Usta: ${master.rows[0].name}\n` +
+            `📍 Koordinatalar: ${lat.toFixed(6)}, ${lng.toFixed(6)}\n` +
+            `📍 Viloyat: ${pendingOrder.region}\n` +
+            `━━━━━━━━━━━━━━━━━━━━`
+          );
+        } catch (adminError) {
+          console.error('Failed to notify admin about master location:', adminError);
+        }
+      }
+      
+      ctx.reply(
+        `✅ Joylashuvingiz qabul qilindi!\n\n` +
+        `📋 Buyurtma ID: #${pendingOrder.orderId}\n` +
+        `📍 Koordinatalar: ${lat.toFixed(6)}, ${lng.toFixed(6)}\n\n` +
+        `Admin sizni buyurtmaga tayinlashi mumkin.`,
+        { reply_markup: getMainMenu() }
+      );
+      return;
+    }
     
     if (session.step === 'awaiting_start_location') {
-      const telegramId = ctx.from.id;
+      pendingOrderLocations.delete(telegramId);
       const lat = ctx.message.location.latitude;
       const lng = ctx.message.location.longitude;
       
@@ -1047,8 +1152,6 @@ bot.on('message:location', async (ctx) => {
       session.data.address = 'Joylashuv';
       session.data.lat = ctx.message.location.latitude;
       session.data.lng = ctx.message.location.longitude;
-      
-      const telegramId = ctx.from.id;
       
       if (isAdmin(telegramId)) {
         session.step = 'select_master';
@@ -1141,8 +1244,14 @@ bot.callbackQuery(/^product:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const session = getSession(ctx.from.id);
     session.data.product = ctx.match[1];
-    session.step = 'quantity';
-    ctx.reply('Miqdorni kiriting:');
+    
+    if (isAdmin(ctx.from.id)) {
+      session.step = 'barcode';
+      ctx.reply('📊 Mahsulot shtrix kodini kiriting (kafolat tekshirish uchun):');
+    } else {
+      session.step = 'quantity';
+      ctx.reply('Miqdorni kiriting:');
+    }
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
   }

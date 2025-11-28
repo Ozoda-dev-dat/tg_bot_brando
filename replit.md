@@ -10,6 +10,12 @@ A comprehensive Telegram bot for managing delivery operations, built with Grammy
 - **Dependencies**: dotenv, grammy, pg, xlsx
 
 ## Recent Changes
+**November 28, 2025** - Region-wide master notification & barcode tracking
+- When admin creates an order, all masters in that region receive a notification asking them to send their location
+- Admin now enters product barcode during order creation for warranty verification
+- Masters who send location in response to order notification are shown to admin with their coordinates
+- Barcode is stored in orders table and displayed in admin notifications
+
 **November 28, 2025** - Location requirement for masters
 - Masters must now share their location every time they start the bot
 - Bot will not show the main menu until location is shared
@@ -43,7 +49,7 @@ The bot uses 4 main tables:
 1. **masters** - Delivery personnel (name, phone, telegram_id, region)
 2. **warehouse** - Product inventory (name, quantity, price, category, region)
 3. **clients** - Customer information (name, phone, address)
-4. **orders** - Delivery orders with tracking info, photos, GPS, warranty status
+4. **orders** - Delivery orders with tracking info, photos, GPS, warranty status, barcode
 
 ### Bot Features
 **Admin Features**:
@@ -62,9 +68,10 @@ The bot uses 4 main tables:
 - Handle warranty and spare parts workflow
 
 ### Key Workflows
-1. **Order Creation**: Admin creates order → Selects master → Chooses product → Adds details → Master receives notification
+1. **Order Creation**: Admin creates order → Enters customer details → Selects master → Chooses product → Enters barcode → Sets quantity → All region masters notified to send location → Order created
 2. **Excel Import**: Admin uploads Excel → Bot parses and imports/updates warehouse products
 3. **Order Fulfillment**: Master views order → Updates status → Uploads before/after photos → Submits GPS location
+4. **Region Master Notification**: When order created → All masters in selected region receive notification → Masters send location → Admin sees master locations
 
 ## Environment Configuration
 

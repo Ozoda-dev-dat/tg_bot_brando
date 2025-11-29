@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { Bot, InlineKeyboard, Keyboard } = require('grammy');
 const { Pool } = require('pg');
-const ExcelJS = require('exceljs');
+const XLSX  = require('xlsx');
 const https = require('https');
 const http = require('http');
 
@@ -41,6 +41,7 @@ async function importProductsFromExcel(buffer, region = null) {
       const model = row['MODEL'] || row['Model'] || row['model'];
       const category = row['CATEGORY'] || row['Category'] || row['category'];
       const subcategory = row['SUB CATEGORY'] || row['Sub Category'] || row['sub category'] || row['SUBCATEGORY'] || row['Subcategory'];
+      const quantity = row['QUANTITY'] || row['Quantity'] || row['quantity'];
       
       if (!model || String(model).trim() === '') {
         skipped++;

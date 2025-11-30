@@ -54,16 +54,19 @@ async function importProductsFromExcel(buffer, region = null) {
         [String(model).trim(), region]
       );
       
+      const parsedQuantity = parseInt(quantity);
+      const validQuantity = !isNaN(parsedQuantity) && parsedQuantity >= 0 ? parsedQuantity : null;
+      
       if (existing.rows.length > 0) {
         await pool.query(
-          'UPDATE warehouse SET category = COALESCE($1, category), subcategory = COALESCE($2, subcategory) WHERE id = $3',
-          [category || null, subcategory || null, existing.rows[0].id]
+          'UPDATE warehouse SET category = COALESCE($1, category), subcategory = COALESCE($2, subcategory), quantity = COALESCE($3, quantity) WHERE id = $4',
+          [category || null, subcategory || null, validQuantity, existing.rows[0].id]
         );
         updated++;
       } else {
         await pool.query(
-          'INSERT INTO warehouse (name, category, subcategory, region, quantity, price) VALUES ($1, $2, $3, $4, 0, 0)',
-          [String(model).trim(), category || null, subcategory || null, region]
+          'INSERT INTO warehouse (name, category, subcategory, region, quantity, price) VALUES ($1, $2, $3, $4, $5, 0)',
+          [String(model).trim(), category || null, subcategory || null, region, validQuantity || 0]
         );
         imported++;
       }
@@ -649,9 +652,9 @@ bot.hears('📋 Barcha buyurtmalar', async (ctx) => {
     }
     
     const orders = await pool.query(
-      `SELECT o.id, m.name as master_name, o.client_name, o.product, o.status, o.created_at
+      `SELECT o.id, COALESCE(m.name, 'Tayinlanmagan') as master_name, o.client_name, o.product, o.status, o.created_at
        FROM orders o
-       JOIN masters m ON o.master_id = m.id
+       LEFT JOIN masters m ON o.master_id = m.id
        ORDER BY o.created_at DESC
        LIMIT 20`
     );
@@ -667,7 +670,7 @@ bot.hears('📋 Barcha buyurtmalar', async (ctx) => {
       message += `Mijoz: ${order.client_name}\n`;
       message += `Mahsulot: ${order.product}\n`;
       message += `Holat: ${order.status}\n`;
-      message += `Sana: ${order.created_at.toLocaleString('uz-UZ')}\n\n`;
+      message += `Sana: ${order.created_at ? order.created_at.toLocaleString('uz-UZ') : 'Noma\'lum'}\n\n`;
     });
     
     ctx.reply(message);
@@ -679,6 +682,7 @@ bot.hears('📋 Barcha buyurtmalar', async (ctx) => {
 bot.hears('🔙 Orqaga', async (ctx) => {
   try {
     const telegramId = ctx.from.id;
+    clearSession(telegramId);
     
     if (isAdmin(telegramId)) {
       return ctx.reply('Admin paneliga xush kelibsiz! 🔧', { reply_markup: getAdminMenu() });
@@ -955,10 +959,12 @@ bot.on('message:text', async (ctx) => {
         
         clearSession(ctx.from.id);
       } catch (dbError) {
+        clearSession(ctx.from.id);
         if (dbError.code === '23505') {
-          ctx.reply('Xatolik: Bu mahsulot allaqachon mavjud');
+          ctx.reply('Xatolik: Bu mahsulot allaqachon mavjud', { reply_markup: getAdminMenu() });
         } else {
-          ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
+          console.error('Admin product insert error:', dbError);
+          ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik', { reply_markup: getAdminMenu() });
         }
       }
     } else if (session.step === 'excel_region_select') {
@@ -971,9 +977,10 @@ bot.on('message:text', async (ctx) => {
         `📥 Excel faylni yuklash\n\n` +
         `📍 Tanlangan viloyat: ${regionText}\n\n` +
         `Excel faylda quyidagi ustunlar bo'lishi kerak:\n` +
+        `• MODEL (majburiy)\n` +
         `• CATEGORY\n` +
         `• SUB CATEGORY\n` +
-        `• MODEL\n\n` +
+        `• QUANTITY (miqdor)\n\n` +
         `📎 Iltimos, Excel faylni (.xlsx, .xls) yuboring:`
       );
     } else if (session.step === 'master_product_name') {

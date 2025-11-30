@@ -1317,9 +1317,9 @@ bot.catch((err) => {
   console.error('Error:', err);
 });
 
-// Botni ishga tushirish - bu joy o'zgartirildi!
+
 // ──────────────────────────────────────────────────────────────
-// FINAL VERSIYA – Render’da 100% ishlaydi
+// FINAL & 100% WORKING VERSIYA (Render + Grammy v1.20+)
 // ──────────────────────────────────────────────────────────────
 
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER_EXTERNAL_URL || !!process.env.RENDER;
@@ -1339,41 +1339,40 @@ if (isProduction) {
 
   console.log(`Webhook o‘rnatilmoqda: ${domain}`);
 
-  // Webhookni o‘rnatamiz
-  bot.api.setWebhook(`${domain}/bot${bot.token}`).then(() => {
-    console.log('Webhook muvaffaqiyatli o‘rnatildi!');
+  // 1. Botni majburiy init qilamiz
+  bot.init().then(async () => {
+    console.log('Bot muvaffaqiyatli init qilindi');
+
+    // 2. Webhook o‘rnatamiz
+    const webhookUrl = `${domain}/webhook`;
+    await bot.api.setWebhook(webhookUrl);
+    console.log(`Webhook muvaffaqiyatli o‘rnatildi: ${webhookUrl}`);
   }).catch(err => {
-    console.error('Webhook o‘rnatishda xato:', err.message);
+    console.error('Bot init yoki webhook xatosi:', err.message);
   });
 
-  // To‘g‘ri endpoint
-  app.post(`/bot${bot.token}`, (req, res) => {
-    bot.handleUpdate(req.body, res);
+  // 3. Express route
+  app.post('/webhook', (req, res) => {
+    bot.handleUpdate(req.body);  // bu yerda init bo‘lgani uchun ishlaydi
+    res.sendStatus(200);
   });
 
-  // Health check (Render bu endpointni ko‘rishni yaxshi ko‘radi)
+  // Health check
   app.get('/', (req, res) => {
-    res.status(200).send('Brando Bot ishlayapti! Webhook active!');
+    res.send('Brando Bot ishlayapti! Webhook active!');
   });
 
   // Serverni ishga tushiramiz
-  const server = app.listen(port, '0.0.0.0', () => {
-    console.log(`Express server ${port} portda ishlayapti`);
-    console.log(`Webhook URL: ${domain}/bot${bot.token.split(':')[1].substring(0,8)}...`);
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Server ${port} portda ishlayapti`);
+    console.log(`Webhook URL: ${domain}/webhook`);
     console.log('Bot to‘liq tayyor – Render’da ishlayapti!');
-  });
-
-  // Agar server xato bersa
-  server.on('error', (err) => {
-    console.error('Server xatosi:', err);
   });
 
 } else {
   // Lokal polling
-  console.log('Lokal polling rejimida ishga tushmoqda...');
-  bot.start({
-    drop_pending_updates: true,
-  });
+  console.log('Lokal polling rejimida...');
+  bot.start({ drop_pending_updates: true });
 }
 
 console.log('Brando Bot - Started with NeonDB 2025');

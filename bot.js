@@ -13,7 +13,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 if (global.isBotInitialized) {
     console.log("⚠️ Bot already initialized, preventing double declaration.");
-    return; // Bot allaqachon yuklangan bo'lsa, kodning qolgan qismini bajarmaydi
+    return; 
 }
 global.isBotInitialized = true;
 

@@ -1,5 +1,7 @@
 require('dotenv').config();
-const { Bot, InlineKeyboard, Keyboard } = require('grammy');
+const grammy = require('grammy');
+const Bot = grammy.Bot;
+const { InlineKeyboard, Keyboard } = require('grammy');
 const { Pool } = require('pg');
 const XLSX  = require('xlsx');
 const https = require('https');

@@ -4,18 +4,21 @@ const Bot = grammy.Bot;
 const { InlineKeyboard, Keyboard } = require('grammy');
 const { Pool } = require('pg');
 const XLSX  = require('xlsx');
+const ExcelJS = require('exceljs');
+const fs = require('fs');
+const path = require('path');
 const https = require('https');
 const http = require('http');
 
+const bot = global.botInstance || new Bot(process.env.BOT_TOKEN);
+const pool = global.poolInstance || new Pool({ connectionString: process.env.DATABASE_URL });
 
-const bot = new Bot(process.env.BOT_TOKEN);
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-if (global.isBotInitialized) {
-    console.log("⚠️ Bot already initialized, preventing double declaration.");
-    return; 
+if (global.botInstance) {
+    console.log("⚠️ Bot already initialized, reusing existing instance.");
+} else {
+    global.botInstance = bot;
+    global.poolInstance = pool;
 }
-global.isBotInitialized = true;
 
 
 async function downloadFile(url) {
@@ -335,7 +338,8 @@ async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orde
 function getMainMenu() {
   return new Keyboard()
     .text('Mening buyurtmalarim').text('Ombor').row()
-    .text('📦 Mahsulot qo\'shish')
+    .text('📦 Mahsulot qo\'shish').text('📊 Excel yuklab olish').row()
+    .text('🔙 Orqaga')
     .resized()
     .persistent();
 }
@@ -599,6 +603,153 @@ bot.hears('➕ Mahsulot qo\'shish', async (ctx) => {
     ctx.reply('Mahsulot nomini kiriting:');
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('📊 Excel yuklab olish', async (ctx) => {
+  try {
+    const telegramId = ctx.from.id;
+    
+    if (!isAdmin(telegramId) && !hasMasterSharedLocation(telegramId)) {
+      const locationKeyboard = new Keyboard()
+        .requestLocation('📍 Joylashuvni yuborish')
+        .resized()
+        .oneTime();
+      
+      const session = getSession(telegramId);
+      session.step = 'awaiting_start_location';
+      
+      return ctx.reply(
+        '⚠️ Avval joylashuvingizni yuboring!\n\n📍 Davom etish uchun joylashuvni yuboring:',
+        { reply_markup: locationKeyboard }
+      );
+    }
+    
+    const master = await pool.query(
+      'SELECT id, name, region FROM masters WHERE telegram_id = $1',
+      [telegramId]
+    );
+    
+    if (master.rows.length === 0) {
+      return ctx.reply('Siz ro\'yxatdan o\'tmagansiz. Adminga murojaat qiling.');
+    }
+    
+    const masterId = master.rows[0].id;
+    const masterName = master.rows[0].name;
+    
+    const orders = await pool.query(
+      `SELECT o.id, o.client_name, o.client_phone, o.address, o.product, 
+              o.quantity, o.status, o.created_at, o.barcode,
+              o.warranty_expired, o.before_photo, o.after_photo
+       FROM orders o
+       WHERE o.master_id = $1
+       ORDER BY o.created_at DESC`,
+      [masterId]
+    );
+    
+    if (orders.rows.length === 0) {
+      return ctx.reply('Sizda hali buyurtmalar yo\'q.', { reply_markup: getMainMenu() });
+    }
+    
+    ctx.reply('⏳ Excel fayl tayyorlanmoqda...');
+    
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Telegram Delivery Bot';
+    workbook.created = new Date();
+    
+    const worksheet = workbook.addWorksheet('Buyurtmalar');
+    
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 8 },
+      { header: 'Mijoz ismi', key: 'client_name', width: 20 },
+      { header: 'Telefon', key: 'client_phone', width: 15 },
+      { header: 'Manzil', key: 'address', width: 25 },
+      { header: 'Mahsulot', key: 'product', width: 20 },
+      { header: 'Miqdor', key: 'quantity', width: 10 },
+      { header: 'Holat', key: 'status', width: 12 },
+      { header: 'Shtrix kod', key: 'barcode', width: 15 },
+      { header: 'Kafolat', key: 'warranty', width: 12 },
+      { header: 'Sana', key: 'created_at', width: 18 }
+    ];
+    
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    
+    const statusMap = {
+      'new': 'Yangi',
+      'accepted': 'Qabul qilingan',
+      'on_way': 'Yo\'lda',
+      'arrived': 'Yetib keldi',
+      'delivered': 'Yetkazildi'
+    };
+    
+    orders.rows.forEach(order => {
+      let warrantyText = '-';
+      if (order.warranty_expired === true) {
+        warrantyText = 'Tugagan';
+      } else if (order.warranty_expired === false) {
+        warrantyText = 'Amal qilmoqda';
+      }
+      
+      let formattedDate = '-';
+      if (order.created_at) {
+        try {
+          const dateObj = order.created_at instanceof Date 
+            ? order.created_at 
+            : new Date(order.created_at);
+          if (!isNaN(dateObj.getTime())) {
+            formattedDate = dateObj.toLocaleString('uz-UZ');
+          }
+        } catch (dateError) {
+          formattedDate = String(order.created_at);
+        }
+      }
+      
+      worksheet.addRow({
+        id: order.id,
+        client_name: order.client_name || '-',
+        client_phone: order.client_phone || '-',
+        address: order.address || '-',
+        product: order.product || '-',
+        quantity: order.quantity || 0,
+        status: statusMap[order.status] || order.status,
+        barcode: order.barcode || '-',
+        warranty: warrantyText,
+        created_at: formattedDate
+      });
+    });
+    
+    const fileName = `buyurtmalar_${masterName.replace(/\s+/g, '_')}_${Date.now()}.xlsx`;
+    const filePath = path.join('/tmp', fileName);
+    
+    await workbook.xlsx.writeFile(filePath);
+    
+    try {
+      await ctx.replyWithDocument(
+        { source: filePath, filename: fileName },
+        { 
+          caption: `📊 Sizning buyurtmalaringiz\n\n👷 Usta: ${masterName}\n📋 Jami: ${orders.rows.length} ta buyurtma`,
+          reply_markup: getMainMenu()
+        }
+      );
+    } finally {
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (cleanupError) {
+        console.error('Failed to cleanup temp file:', cleanupError);
+      }
+    }
+    
+  } catch (error) {
+    console.error('Excel export error:', error);
+    ctx.reply('Excel faylni yaratishda xatolik yuz berdi', { reply_markup: getMainMenu() });
   }
 });
 

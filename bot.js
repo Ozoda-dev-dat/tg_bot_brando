@@ -926,12 +926,103 @@ bot.callbackQuery(/^select_master:(\d+)$/, async (ctx) => {
     session.data.selectedMasterTelegramId = master.telegram_id;
     session.data.masterRegion = master.region;
     
+    session.step = 'product_category';
+    
+    const categories = await pool.query(
+      'SELECT DISTINCT category FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 AND category IS NOT NULL ORDER BY category',
+      [master.region]
+    );
+    
+    if (categories.rows.length > 0) {
+      const keyboard = new InlineKeyboard();
+      categories.rows.forEach(c => {
+        keyboard.text(c.category, `product_cat:${c.category}`).row();
+      });
+      await ctx.editMessageText(`👷 Tanlangan usta: ${master.name}\n\n📁 Kategoriyani tanlang:`, { reply_markup: keyboard });
+    } else {
+      clearSession(ctx.from.id);
+      await ctx.editMessageText('❌ Omborda mahsulot yo\'q.');
+      ctx.reply('Admin menyu:', { reply_markup: getAdminMenu() });
+    }
+  } catch (error) {
+    console.error('Select master callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^product_cat:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'product_category') {
+      return;
+    }
+    
+    const category = ctx.match[1];
+    session.data.productCategory = category;
+    session.step = 'product_subcategory';
+    
+    const subcategories = await pool.query(
+      'SELECT DISTINCT subcategory FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL) AND quantity > 0 AND subcategory IS NOT NULL ORDER BY subcategory',
+      [category, session.data.masterRegion]
+    );
+    
+    if (subcategories.rows.length > 0) {
+      const keyboard = new InlineKeyboard();
+      subcategories.rows.forEach(s => {
+        keyboard.text(s.subcategory, `product_subcat:${s.subcategory}`).row();
+      });
+      keyboard.text('🔙 Orqaga', 'product_cat_back').row();
+      await ctx.editMessageText(`📁 Kategoriya: ${category}\n\n📂 Subkategoriyani tanlang:`, { reply_markup: keyboard });
+    } else {
+      session.step = 'product';
+      session.data.productPage = 0;
+      
+      const products = await pool.query(
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        [category, session.data.masterRegion]
+      );
+      
+      if (products.rows.length > 0) {
+        const pageSize = 8;
+        const keyboard = new InlineKeyboard();
+        products.rows.slice(0, pageSize).forEach(p => {
+          keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
+        });
+        if (products.rows.length > pageSize) {
+          keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+        }
+        keyboard.text('🔙 Orqaga', 'product_cat_back').row();
+        await ctx.editMessageText(`📁 Kategoriya: ${category}\n\n📦 Mahsulotni tanlang:`, { reply_markup: keyboard });
+      } else {
+        await ctx.editMessageText('❌ Bu kategoriyada mahsulot yo\'q.');
+        clearSession(ctx.from.id);
+      }
+    }
+  } catch (error) {
+    console.error('Product category callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^product_subcat:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'product_subcategory') {
+      return;
+    }
+    
+    const subcategory = ctx.match[1];
+    session.data.productSubcategory = subcategory;
     session.step = 'product';
     session.data.productPage = 0;
     
     const products = await pool.query(
-      'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
-      [master.region]
+      'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND subcategory = $2 AND (region = $3 OR region IS NULL) AND quantity > 0 ORDER BY name',
+      [session.data.productCategory, subcategory, session.data.masterRegion]
     );
     
     if (products.rows.length > 0) {
@@ -943,13 +1034,71 @@ bot.callbackQuery(/^select_master:(\d+)$/, async (ctx) => {
       if (products.rows.length > pageSize) {
         keyboard.text('➡️ Keyingisi', 'product_next:1').row();
       }
-      ctx.reply(`👷 Tanlangan usta: ${master.name}\n\n📦 Mahsulotni tanlang:`, { reply_markup: keyboard });
+      keyboard.text('🔙 Orqaga', 'product_subcat_back').row();
+      await ctx.editMessageText(`📂 Subkategoriya: ${subcategory}\n\n📦 Mahsulotni tanlang:`, { reply_markup: keyboard });
     } else {
+      await ctx.editMessageText('❌ Bu subkategoriyada mahsulot yo\'q.');
       clearSession(ctx.from.id);
-      ctx.reply('❌ Omborda mahsulot yo\'q.', { reply_markup: getAdminMenu() });
     }
   } catch (error) {
-    console.error('Select master callback error:', error);
+    console.error('Product subcategory callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery('product_cat_back', async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    session.step = 'product_category';
+    delete session.data.productCategory;
+    
+    const categories = await pool.query(
+      'SELECT DISTINCT category FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 AND category IS NOT NULL ORDER BY category',
+      [session.data.masterRegion]
+    );
+    
+    if (categories.rows.length > 0) {
+      const keyboard = new InlineKeyboard();
+      categories.rows.forEach(c => {
+        keyboard.text(c.category, `product_cat:${c.category}`).row();
+      });
+      const masterName = session.data.selectedMasterName || '';
+      const headerText = masterName ? `👷 Tanlangan usta: ${masterName}\n\n` : '';
+      await ctx.editMessageText(`${headerText}📁 Kategoriyani tanlang:`, { reply_markup: keyboard });
+    }
+  } catch (error) {
+    console.error('Product cat back callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery('product_subcat_back', async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    session.step = 'product_subcategory';
+    delete session.data.productSubcategory;
+    
+    const category = session.data.productCategory;
+    
+    const subcategories = await pool.query(
+      'SELECT DISTINCT subcategory FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL) AND quantity > 0 AND subcategory IS NOT NULL ORDER BY subcategory',
+      [category, session.data.masterRegion]
+    );
+    
+    if (subcategories.rows.length > 0) {
+      const keyboard = new InlineKeyboard();
+      subcategories.rows.forEach(s => {
+        keyboard.text(s.subcategory, `product_subcat:${s.subcategory}`).row();
+      });
+      keyboard.text('🔙 Orqaga', 'product_cat_back').row();
+      await ctx.editMessageText(`📁 Kategoriya: ${category}\n\n📂 Subkategoriyani tanlang:`, { reply_markup: keyboard });
+    }
+  } catch (error) {
+    console.error('Product subcat back callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -1241,6 +1390,47 @@ bot.on('message:text', async (ctx) => {
       session.data.barcode = ctx.message.text;
       session.step = 'quantity';
       ctx.reply('Miqdorni kiriting:');
+    } else if (session.step === 'completion_barcode') {
+      const completionBarcode = ctx.message.text;
+      const orderId = session.data.orderId;
+      
+      await pool.query(
+        "UPDATE orders SET status = 'delivered', completion_barcode = $1 WHERE id = $2",
+        [completionBarcode, orderId]
+      );
+      
+      clearSession(ctx.from.id);
+      
+      ctx.reply('✅ Buyurtma muvaffaqiyatli yakunlandi!', { reply_markup: getMainMenu() });
+      
+      try {
+        const orderDetails = await pool.query(
+          `SELECT o.*, m.name as master_name 
+           FROM orders o 
+           JOIN masters m ON o.master_id = m.id 
+           WHERE o.id = $1`,
+          [orderId]
+        );
+        
+        if (orderDetails.rows.length > 0) {
+          const od = orderDetails.rows[0];
+          const warrantyStatus = od.warranty_expired ? 'Tugagan' : 'Amal qilmoqda';
+          
+          await notifyAdmins(
+            `✅ BUYURTMA YAKUNLANDI!\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📋 Buyurtma ID: #${orderId}\n` +
+            `👷 Usta: ${od.master_name}\n` +
+            `👤 Mijoz: ${od.client_name}\n` +
+            `📦 Mahsulot: ${od.product}\n` +
+            `🛡️ Kafolat: ${warrantyStatus}\n` +
+            `📊 Shtrix kod: ${completionBarcode}\n` +
+            `━━━━━━━━━━━━━━━━━━━━`
+          );
+        }
+      } catch (adminError) {
+        console.error('Failed to notify admin about completion:', adminError);
+      }
     } else if (session.step === 'quantity') {
       const quantity = parseInt(ctx.message.text);
       if (isNaN(quantity) || quantity <= 0) {
@@ -1629,8 +1819,7 @@ bot.callbackQuery(/^order_sub:(.+)$/, async (ctx) => {
         ctx.reply('👷 Usta tanlang:', { reply_markup: keyboard });
       }
     } else {
-      session.step = 'product';
-      session.data.productPage = 0;
+      session.step = 'product_category';
       
       const masterResult = await pool.query(
         'SELECT region FROM masters WHERE telegram_id = $1',
@@ -1639,21 +1828,17 @@ bot.callbackQuery(/^order_sub:(.+)$/, async (ctx) => {
       const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
       session.data.masterRegion = masterRegion;
       
-      const products = await pool.query(
-        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
+      const categories = await pool.query(
+        'SELECT DISTINCT category FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 AND category IS NOT NULL ORDER BY category',
         [masterRegion]
       );
       
-      if (products.rows.length > 0) {
-        const pageSize = 8;
+      if (categories.rows.length > 0) {
         const keyboard = new InlineKeyboard();
-        products.rows.slice(0, pageSize).forEach(p => {
-          keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
+        categories.rows.forEach(c => {
+          keyboard.text(c.category, `product_cat:${c.category}`).row();
         });
-        if (products.rows.length > pageSize) {
-          keyboard.text('➡️ Keyingisi', 'product_next:1').row();
-        }
-        ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
+        ctx.reply('📁 Kategoriyani tanlang:', { reply_markup: keyboard });
       } else {
         clearSession(ctx.from.id);
         ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
@@ -1670,6 +1855,8 @@ bot.callbackQuery(/^product:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const session = getSession(ctx.from.id);
     session.data.product = ctx.match[1];
+    
+    await ctx.editMessageText(`✅ Tanlangan mahsulot: ${ctx.match[1]}`);
     
     if (isAdmin(ctx.from.id)) {
       session.step = 'barcode';
@@ -1689,10 +1876,23 @@ bot.callbackQuery(/^product_next:(\d+)$/, async (ctx) => {
     const session = getSession(ctx.from.id);
     const pageSize = 8;
     
-    const products = await pool.query(
-      'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
-      [session.data.masterRegion]
-    );
+    let products;
+    if (session.data.productCategory && session.data.productSubcategory) {
+      products = await pool.query(
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND subcategory = $2 AND (region = $3 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        [session.data.productCategory, session.data.productSubcategory, session.data.masterRegion]
+      );
+    } else if (session.data.productCategory) {
+      products = await pool.query(
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        [session.data.productCategory, session.data.masterRegion]
+      );
+    } else {
+      products = await pool.query(
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        [session.data.masterRegion]
+      );
+    }
     
     if (products.rows.length === 0) {
       clearSession(ctx.from.id);
@@ -1724,6 +1924,12 @@ bot.callbackQuery(/^product_next:(\d+)$/, async (ctx) => {
     }
     if (page > 0 || end < products.rows.length) {
       keyboard.row();
+    }
+    
+    if (session.data.productSubcategory) {
+      keyboard.text('🔙 Orqaga', 'product_subcat_back').row();
+    } else if (session.data.productCategory) {
+      keyboard.text('🔙 Orqaga', 'product_cat_back').row();
     }
     
     await ctx.editMessageText(`📦 Mahsulotni tanlang (${page + 1}/${totalPages}):`, { reply_markup: keyboard });
@@ -2065,42 +2271,11 @@ bot.callbackQuery(/^finish_order:(\d+)$/, async (ctx) => {
       }
     }
     
-    await pool.query(
-      "UPDATE orders SET status = 'delivered' WHERE id = $1",
-      [orderId]
-    );
+    const session = getSession(ctx.from.id);
+    session.step = 'completion_barcode';
+    session.data.orderId = orderId;
     
-    clearSession(ctx.from.id);
-    
-    ctx.reply('✅ Buyurtma muvaffaqiyatli yakunlandi!', { reply_markup: getMainMenu() });
-    
-    try {
-      const orderDetails = await pool.query(
-        `SELECT o.*, m.name as master_name 
-         FROM orders o 
-         JOIN masters m ON o.master_id = m.id 
-         WHERE o.id = $1`,
-        [orderId]
-      );
-      
-      if (orderDetails.rows.length > 0) {
-        const od = orderDetails.rows[0];
-        const warrantyStatus = od.warranty_expired ? 'Tugagan' : 'Amal qilmoqda';
-        
-        await notifyAdmins(
-          `✅ BUYURTMA YAKUNLANDI!\n\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `📋 Buyurtma ID: #${orderId}\n` +
-          `👷 Usta: ${od.master_name}\n` +
-          `👤 Mijoz: ${od.client_name}\n` +
-          `📦 Mahsulot: ${od.product}\n` +
-          `🛡️ Kafolat: ${warrantyStatus}\n` +
-          `━━━━━━━━━━━━━━━━━━━━`
-        );
-      }
-    } catch (adminError) {
-      console.error('Failed to notify admin about completion:', adminError);
-    }
+    ctx.reply('📊 Mahsulot shtrix kodini kiriting (kafolat tekshirish uchun):');
   } catch (error) {
     console.error('Finish order callback error:', error);
     ctx.reply('Xatolik yuz berdi');

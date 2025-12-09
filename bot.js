@@ -2246,9 +2246,36 @@ bot.catch((err) => {
   console.error('Error:', err);
 });
 
-bot.start();
+process.once('SIGINT', () => {
+  console.log('SIGINT received, stopping bot...');
+  bot.stop();
+});
 
-console.log('Bot is running...');
+process.once('SIGTERM', () => {
+  console.log('SIGTERM received, stopping bot...');
+  bot.stop();
+});
 
-console.log('Brando Bot - Started with NeonDB 2025');
+async function startBot() {
+  try {
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
+    await bot.start({
+      drop_pending_updates: true,
+      onStart: () => {
+        console.log('Bot is running...');
+        console.log('Brando Bot - Started with NeonDB 2025');
+      }
+    });
+  } catch (error) {
+    if (error.error_code === 409) {
+      console.log('Another bot instance detected. Waiting 5 seconds before retry...');
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      return startBot();
+    }
+    console.error('Failed to start bot:', error);
+    process.exit(1);
+  }
+}
+
+startBot();
 

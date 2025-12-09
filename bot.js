@@ -272,6 +272,10 @@ async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orde
             { reply_markup: acceptKeyboard }
           );
           
+          if (orderLat && orderLng) {
+            await bot.api.sendLocation(closestMaster.telegram_id, orderLat, orderLng);
+          }
+          
           await notifyAdmins(
             `📍 Eng yaqin usta topildi!\n\n` +
             `📋 Buyurtma ID: #${orderId}\n` +
@@ -322,6 +326,11 @@ async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orde
           `⚡ Buyurtmani qabul qilish uchun joylashuvingizni yuboring:`,
           { reply_markup: locationKeyboard }
         );
+        
+        if (orderLat && orderLng) {
+          await bot.api.sendLocation(master.telegram_id, orderLat, orderLng);
+        }
+        
         notified++;
       } catch (error) {
         console.error(`Failed to notify master ${master.telegram_id}:`, error);
@@ -1480,53 +1489,13 @@ bot.on('message:location', async (ctx) => {
       session.data.lat = ctx.message.location.latitude;
       session.data.lng = ctx.message.location.longitude;
       
-      if (isAdmin(telegramId)) {
-        session.step = 'select_master';
-        const masters = await pool.query(
-          'SELECT id, name, region FROM masters ORDER BY region, name'
-        );
-        
-        if (masters.rows.length === 0) {
-          clearSession(ctx.from.id);
-          return ctx.reply('❌ Ustalar topilmadi. Avval usta qo\'shing.', { reply_markup: getAdminMenu() });
-        }
-        
-        const keyboard = new InlineKeyboard();
-        masters.rows.forEach(m => {
-          keyboard.text(`${m.name} (${m.region || 'Hudud yo\'q'})`, `select_master:${m.id}`).row();
-        });
-        ctx.reply('👷 Usta tanlang:', { reply_markup: keyboard });
-      } else {
-        session.step = 'product';
-        session.data.productPage = 0;
-        
-        const masterResult = await pool.query(
-          'SELECT region FROM masters WHERE telegram_id = $1',
-          [telegramId]
-        );
-        const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
-        session.data.masterRegion = masterRegion;
-        
-        const products = await pool.query(
-          'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
-          [masterRegion]
-        );
-        
-        if (products.rows.length > 0) {
-          const pageSize = 8;
-          const keyboard = new InlineKeyboard();
-          products.rows.slice(0, pageSize).forEach(p => {
-            keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
-          });
-          if (products.rows.length > pageSize) {
-            keyboard.text('➡️ Keyingisi', 'product_next:1').row();
-          }
-          ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
-        } else {
-          clearSession(ctx.from.id);
-          ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
-        }
-      }
+      session.step = 'order_region_category';
+      const categories = getRegionCategories();
+      const keyboard = new InlineKeyboard();
+      categories.forEach(cat => {
+        keyboard.text(cat, `order_cat:${cat}`).row();
+      });
+      ctx.reply('📍 Viloyatni tanlang:', { reply_markup: keyboard });
     } else if (session.step === 'master_gps') {
       const masterLat = ctx.message.location.latitude;
       const masterLng = ctx.message.location.longitude;
@@ -1562,6 +1531,136 @@ bot.on('message:location', async (ctx) => {
     }
   } catch (error) {
     console.error('Location handler error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^order_cat:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'order_region_category') {
+      return;
+    }
+    
+    const category = ctx.match[1];
+    session.data.orderRegionCategory = category;
+    session.step = 'order_region_subcategory';
+    
+    const subcategories = getSubcategories(category);
+    const keyboard = new InlineKeyboard();
+    subcategories.forEach(sub => {
+      keyboard.text(sub, `order_sub:${sub}`).row();
+    });
+    keyboard.text('🔙 Orqaga', 'order_cat_back');
+    
+    await ctx.editMessageText(`📍 ${category}\n\nTumanni tanlang:`, { reply_markup: keyboard });
+  } catch (error) {
+    console.error('Order category callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery('order_cat_back', async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    session.step = 'order_region_category';
+    delete session.data.orderRegionCategory;
+    
+    const categories = getRegionCategories();
+    const keyboard = new InlineKeyboard();
+    categories.forEach(cat => {
+      keyboard.text(cat, `order_cat:${cat}`).row();
+    });
+    
+    await ctx.editMessageText('📍 Viloyatni tanlang:', { reply_markup: keyboard });
+  } catch (error) {
+    console.error('Order category back callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^order_sub:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    const telegramId = ctx.from.id;
+    
+    if (session.step !== 'order_region_subcategory') {
+      return;
+    }
+    
+    const subcategory = ctx.match[1];
+    session.data.orderRegionSubcategory = subcategory;
+    session.data.selectedRegion = subcategory;
+    
+    await ctx.editMessageText(`✅ Tanlangan hudud: ${session.data.orderRegionCategory} - ${subcategory}`);
+    
+    if (isAdmin(telegramId)) {
+      session.step = 'select_master';
+      const masters = await pool.query(
+        'SELECT id, name, region FROM masters WHERE region = $1 ORDER BY name',
+        [subcategory]
+      );
+      
+      if (masters.rows.length === 0) {
+        const allMasters = await pool.query(
+          'SELECT id, name, region FROM masters ORDER BY region, name'
+        );
+        
+        if (allMasters.rows.length === 0) {
+          clearSession(ctx.from.id);
+          return ctx.reply('❌ Ustalar topilmadi. Avval usta qo\'shing.', { reply_markup: getAdminMenu() });
+        }
+        
+        const keyboard = new InlineKeyboard();
+        allMasters.rows.forEach(m => {
+          keyboard.text(`${m.name} (${m.region || 'Hudud yo\'q'})`, `select_master:${m.id}`).row();
+        });
+        ctx.reply(`⚠️ ${subcategory} hududida usta yo'q. Boshqa ustalardan tanlang:`, { reply_markup: keyboard });
+      } else {
+        const keyboard = new InlineKeyboard();
+        masters.rows.forEach(m => {
+          keyboard.text(`${m.name} (${m.region || 'Hudud yo\'q'})`, `select_master:${m.id}`).row();
+        });
+        ctx.reply('👷 Usta tanlang:', { reply_markup: keyboard });
+      }
+    } else {
+      session.step = 'product';
+      session.data.productPage = 0;
+      
+      const masterResult = await pool.query(
+        'SELECT region FROM masters WHERE telegram_id = $1',
+        [telegramId]
+      );
+      const masterRegion = masterResult.rows.length > 0 ? masterResult.rows[0].region : null;
+      session.data.masterRegion = masterRegion;
+      
+      const products = await pool.query(
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        [masterRegion]
+      );
+      
+      if (products.rows.length > 0) {
+        const pageSize = 8;
+        const keyboard = new InlineKeyboard();
+        products.rows.slice(0, pageSize).forEach(p => {
+          keyboard.text(`${p.name} (${p.quantity})`, `product:${p.name}`).row();
+        });
+        if (products.rows.length > pageSize) {
+          keyboard.text('➡️ Keyingisi', 'product_next:1').row();
+        }
+        ctx.reply('📦 Mahsulotni tanlang:', { reply_markup: keyboard });
+      } else {
+        clearSession(ctx.from.id);
+        ctx.reply('❌ Omborda mahsulot yo\'q. Iltimos adminga murojaat qiling.', { reply_markup: getMainMenu() });
+      }
+    }
+  } catch (error) {
+    console.error('Order subcategory callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });

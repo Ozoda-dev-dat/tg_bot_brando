@@ -1695,12 +1695,37 @@ bot.on('message:location', async (ctx) => {
         [masterLat, masterLng, session.data.orderId]
       );
       
+      const order = await pool.query(
+        'SELECT lat, lng, client_name, address, product FROM orders WHERE id = $1',
+        [session.data.orderId]
+      );
+      
+      let distanceText = '';
+      if (order.rows.length > 0 && order.rows[0].lat && order.rows[0].lng) {
+        const clientLat = order.rows[0].lat;
+        const clientLng = order.rows[0].lng;
+        const distance = calculateDistance(masterLat, masterLng, clientLat, clientLng);
+        distanceText = `\n📏 Mijozgacha masofa: ~${distance.toFixed(2)} km`;
+        
+        await ctx.reply(
+          `📍 GPS joylashuv saqlandi!\n` +
+          `Holat: Yo'lda${distanceText}\n\n` +
+          `👤 Mijoz: ${order.rows[0].client_name}\n` +
+          `📦 Mahsulot: ${order.rows[0].product}\n\n` +
+          `📍 Mijoz joylashuvi:`
+        );
+        
+        await ctx.api.sendLocation(ctx.from.id, clientLat, clientLng);
+      } else {
+        await ctx.reply('📍 GPS joylashuv saqlandi!\nHolat: Yo\'lda');
+      }
+      
       session.step = 'arrived_pending';
       
       const keyboard = new InlineKeyboard()
         .text('Yetib keldim', `arrived:${session.data.orderId}`);
       
-      ctx.reply('📍 GPS joylashuv saqlandi!\nHolat: Yo\'lda', { reply_markup: keyboard });
+      ctx.reply('Yetib kelganingizda tugmani bosing:', { reply_markup: keyboard });
     } else if (session.step === 'completion_gps') {
       const completionLat = ctx.message.location.latitude;
       const completionLng = ctx.message.location.longitude;

@@ -2350,6 +2350,37 @@ bot.on('message:photo', async (ctx) => {
         'UPDATE orders SET before_photo = $1 WHERE id = $2',
         [fileId, session.data.orderId]
       );
+      
+      const order = await pool.query(
+        `SELECT o.*, m.name as master_name, m.region 
+         FROM orders o 
+         JOIN masters m ON o.master_id = m.id 
+         WHERE o.id = $1`,
+        [session.data.orderId]
+      );
+      
+      if (order.rows.length > 0) {
+        const od = order.rows[0];
+        try {
+          await sendPhotoToAdmins(
+            fileId,
+            {
+              caption: `🚀 USTA ISHNI BOSHLADI!\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `📋 Buyurtma ID: #${session.data.orderId}\n` +
+                `👷 Usta: ${od.master_name}\n` +
+                `📍 Viloyat: ${od.region || 'Noma\'lum'}\n` +
+                `👤 Mijoz: ${od.client_name}\n` +
+                `📦 Mahsulot: ${od.product}\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `📸 Ishdan OLDINGI rasm`
+            }
+          );
+        } catch (adminError) {
+          console.error('Failed to notify admin about before photo:', adminError);
+        }
+      }
+      
       session.step = 'after_photo';
       ctx.reply('📸 Oldingi rasm saqlandi!\n\nEndi ishdan KEYINGI rasmni yuboring:');
     } else if (session.step === 'after_photo') {
@@ -2358,6 +2389,37 @@ bot.on('message:photo', async (ctx) => {
         'UPDATE orders SET after_photo = $1 WHERE id = $2',
         [fileId, session.data.orderId]
       );
+      
+      const order = await pool.query(
+        `SELECT o.*, m.name as master_name, m.region 
+         FROM orders o 
+         JOIN masters m ON o.master_id = m.id 
+         WHERE o.id = $1`,
+        [session.data.orderId]
+      );
+      
+      if (order.rows.length > 0) {
+        const od = order.rows[0];
+        try {
+          await sendPhotoToAdmins(
+            fileId,
+            {
+              caption: `✅ USTA ISHNI TUGATDI!\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `📋 Buyurtma ID: #${session.data.orderId}\n` +
+                `👷 Usta: ${od.master_name}\n` +
+                `📍 Viloyat: ${od.region || 'Noma\'lum'}\n` +
+                `👤 Mijoz: ${od.client_name}\n` +
+                `📦 Mahsulot: ${od.product}\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `📸 Ishdan KEYINGI rasm`
+            }
+          );
+        } catch (adminError) {
+          console.error('Failed to notify admin about after photo:', adminError);
+        }
+      }
+      
       session.step = 'completion_gps';
       
       const keyboard = new Keyboard()

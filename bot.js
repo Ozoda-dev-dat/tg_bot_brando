@@ -302,29 +302,25 @@ async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orde
     let notified = 0;
     for (const master of masters.rows) {
       if (!master.telegram_id) continue;
+      if (excludeTelegramIds.includes(master.telegram_id)) continue;
       
       try {
-        pendingOrderLocations.set(master.telegram_id, {
-          orderId,
-          region,
-          orderDetails,
-          timestamp: Date.now()
-        });
-        
-        const locationKeyboard = new Keyboard()
-          .requestLocation('📍 Joylashuvni yuborish')
-          .resized()
-          .oneTime();
+        const acceptKeyboard = new InlineKeyboard()
+          .text('✅ Qabul qilish', `accept_order:${orderId}`)
+          .row()
+          .text('❌ Rad etish', `reject_order:${orderId}`);
         
         await bot.api.sendMessage(
           master.telegram_id,
-          `🆕 Yangi buyurtma!\n\n` +
+          `🆕 YANGI BUYURTMA!\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
           `📋 Buyurtma ID: #${orderId}\n` +
           `👤 Mijoz: ${orderDetails.clientName}\n` +
           `📦 Mahsulot: ${orderDetails.product}\n` +
-          `📍 Manzil: ${orderDetails.address}\n\n` +
-          `⚡ Buyurtmani qabul qilish uchun joylashuvingizni yuboring:`,
-          { reply_markup: locationKeyboard }
+          `📍 Manzil: ${orderDetails.address}\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `Buyurtmani qabul qilasizmi?`,
+          { reply_markup: acceptKeyboard }
         );
         
         if (orderLat && orderLng) {

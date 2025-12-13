@@ -422,9 +422,9 @@ bot.hears('+ Yangi yetkazish', async (ctx) => {
     }
     
     const session = getSession(ctx.from.id);
-    session.step = 'customer_name';
+    session.step = 'phone';
     session.data = {};
-    ctx.reply('Mijoz ismini kiriting:');
+    ctx.reply('Telefon raqamini kiriting:');
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
   }
@@ -886,9 +886,9 @@ bot.callbackQuery('new_delivery', async (ctx) => {
     }
     
     const session = getSession(ctx.from.id);
-    session.step = 'customer_name';
+    session.step = 'phone';
     session.data = {};
-    ctx.reply('Mijoz ismini kiriting:');
+    ctx.reply('Telefon raqamini kiriting:');
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
   }
@@ -1355,18 +1355,31 @@ bot.on('message:text', async (ctx) => {
         console.error('Database error:', dbError);
         ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
       }
+    } else if (session.step === 'phone') {
+      const phone = ctx.message.text;
+      try {
+        const client = await pool.query('SELECT * FROM clients WHERE phone = $1', [phone]);
+        if (client.rows.length > 0) {
+          session.data.customerName = client.rows[0].name;
+          session.data.phone = phone;
+          session.data.address = client.rows[0].address;
+          session.step = 'order_region_category';
+          const categories = getRegionCategories();
+          const keyboard = new InlineKeyboard();
+          categories.forEach(cat => {
+            keyboard.text(cat, `order_cat:${cat}`).row();
+          });
+          ctx.reply('📍 Viloyatni tanlang:', { reply_markup: keyboard });
+        } else {
+          session.data.phone = phone;
+          session.step = 'customer_name';
+          ctx.reply('Mijoz ismini kiriting:');
+        }
+      } catch (error) {
+        ctx.reply('Xatolik yuz berdi');
+      }
     } else if (session.step === 'customer_name') {
       session.data.customerName = ctx.message.text;
-      session.step = 'phone';
-      
-      const contactKeyboard = new Keyboard()
-        .requestContact('📱 Kontaktni yuborish')
-        .resized()
-        .oneTime();
-      
-      ctx.reply('Telefon raqamini yuboring (matn yoki kontakt):', { reply_markup: contactKeyboard });
-    } else if (session.step === 'phone') {
-      session.data.phone = ctx.message.text;
       session.step = 'address';
       
       const locationKeyboard = new Keyboard()
@@ -1590,15 +1603,28 @@ bot.on('message:contact', async (ctx) => {
   try {
     const session = getSession(ctx.from.id);
     if (session.step === 'phone') {
-      session.data.phone = ctx.message.contact.phone_number;
-      session.step = 'address';
-      
-      const locationKeyboard = new Keyboard()
-        .requestLocation('📍 Joylashuvni yuborish')
-        .resized()
-        .oneTime();
-      
-      ctx.reply('📍 Mijoz joylashuvini yuboring:', { reply_markup: locationKeyboard });
+      const phone = ctx.message.contact.phone_number;
+      try {
+        const client = await pool.query('SELECT * FROM clients WHERE phone = $1', [phone]);
+        if (client.rows.length > 0) {
+          session.data.customerName = client.rows[0].name;
+          session.data.phone = phone;
+          session.data.address = client.rows[0].address;
+          session.step = 'order_region_category';
+          const categories = getRegionCategories();
+          const keyboard = new InlineKeyboard();
+          categories.forEach(cat => {
+            keyboard.text(cat, `order_cat:${cat}`).row();
+          });
+          ctx.reply('📍 Viloyatni tanlang:', { reply_markup: keyboard });
+        } else {
+          session.data.phone = phone;
+          session.step = 'customer_name';
+          ctx.reply('Mijoz ismini kiriting:');
+        }
+      } catch (error) {
+        ctx.reply('Xatolik yuz berdi');
+      }
     }
   } catch (error) {
     console.error('Contact handler error:', error);

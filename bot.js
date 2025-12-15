@@ -1,7 +1,7 @@
 require('dotenv').config();
 const grammy = require('grammy');
 const Bot = grammy.Bot;
-const { InlineKeyboard, Keyboard } = require('grammy');
+const { InlineKeyboard, Keyboard, InputFile } = require('grammy');
 const { Pool } = require('pg');
 const XLSX  = require('xlsx');
 const ExcelJS = require('exceljs');
@@ -736,7 +736,7 @@ bot.hears('📊 Excel yuklab olish', async (ctx) => {
     
     try {
       await ctx.replyWithDocument(
-        { source: filePath, filename: fileName },
+        new InputFile(filePath, fileName),
         { 
           caption: `📊 Sizning buyurtmalaringiz\n\n👷 Usta: ${masterName}\n📋 Jami: ${orders.rows.length} ta buyurtma`,
           reply_markup: getMainMenu()

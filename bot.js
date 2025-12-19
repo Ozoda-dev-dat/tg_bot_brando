@@ -1552,8 +1552,8 @@ bot.on('message:text', async (ctx) => {
       const available = stock.rows.length > 0 ? stock.rows[0].quantity : 0;
       const stockId = stock.rows.length > 0 ? stock.rows[0].id : null;
       
-      if (stock.rows.length === 0 || available < quantity) {
-        const shortage = quantity - available;
+      if (stock.rows.length === 0 || available < session.data.quantity) {
+        const shortage = session.data.quantity - available;
         
         try {
           await notifyAdmins(
@@ -1710,8 +1710,8 @@ bot.on('message:text', async (ctx) => {
       const available = stock.rows.length > 0 ? stock.rows[0].quantity : 0;
       const stockId = stock.rows.length > 0 ? stock.rows[0].id : null;
       
-      if (stock.rows.length === 0 || available < quantity) {
-        const shortage = quantity - available;
+      if (stock.rows.length === 0 || available < session.data.quantity) {
+        const shortage = session.data.quantity - available;
         
         try {
           await notifyAdmins(

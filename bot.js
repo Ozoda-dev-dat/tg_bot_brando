@@ -363,7 +363,8 @@ function getAdminMenu() {
     .text('➕ Usta qo\'shish').text('➕ Mahsulot qo\'shish').row()
     .text('📥 Excel import').text('📋 Barcha buyurtmalar').row()
     .text('👥 Barcha ustalar').text('📦 Ombor').row()
-    .text('🔙 Orqaga')
+    .text('� Oylik hisobot').row()
+    .text('�🔙 Orqaga')
     .resized()
     .persistent();
 }
@@ -844,6 +845,34 @@ bot.hears('📋 Barcha buyurtmalar', async (ctx) => {
     
     ctx.reply(message);
   } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('📊 Oylik hisobot', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const session = getSession(ctx.from.id);
+    session.step = 'monthly_report_year';
+    session.data = {};
+    
+    const currentYear = new Date().getFullYear();
+    const keyboard = new InlineKeyboard();
+    
+    for (let year = currentYear; year >= currentYear - 2; year--) {
+      keyboard.text(`${year}`, `report_year:${year}`).row();
+    }
+    
+    ctx.reply(
+      '📊 Oylik hisobot\n\n' +
+      'Yilni tanlang:',
+      { reply_markup: keyboard }
+    );
+  } catch (error) {
+    console.error('Monthly report error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -1793,6 +1822,7 @@ bot.on('message:text', async (ctx) => {
       } catch (adminError) {
         console.error('Failed to notify admin:', adminError);
       }
+    }
   } catch (error) {
     console.error('Message text handler error:', error);
     ctx.reply('Xatolik yuz berdi');
@@ -2578,6 +2608,220 @@ bot.callbackQuery(/^finish_order:(\d+)$/, async (ctx) => {
     ctx.reply('📊 Mahsulot shtrix kodini kiriting (kafolat tekshirish uchun):');
   } catch (error) {
     console.error('Finish order callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^report_year:(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const year = parseInt(ctx.match[1]);
+    
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const session = getSession(ctx.from.id);
+    session.data.reportYear = year;
+    session.step = 'monthly_report_month';
+    
+    const keyboard = new InlineKeyboard();
+    const months = [
+      'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
+      'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'
+    ];
+    
+    months.forEach((month, index) => {
+      keyboard.text(month, `report_month:${index + 1}`).row();
+    });
+    
+    await ctx.editMessageText(
+      `📊 Oylik hisobot\n\n` +
+      `Yil: ${year}\n\n` +
+      `Oyni tanlang:`,
+      { reply_markup: keyboard }
+    );
+  } catch (error) {
+    console.error('Report year callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^report_month:(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const month = parseInt(ctx.match[1]);
+    
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const session = getSession(ctx.from.id);
+    const year = session.data.reportYear;
+    
+    if (!year) {
+      return ctx.reply('Yil tanlanmagan');
+    }
+    
+    ctx.editMessageText('⏳ Hisobot tayyorlanmoqda...');
+    
+    // Generate Excel report for the selected month
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 1);
+    
+    const orders = await pool.query(
+      `SELECT 
+        o.id, m.name as master_name, m.region, o.client_name, o.client_phone,
+        o.address, o.product, o.quantity, o.status, o.created_at,
+        o.product_date, o.barcode, o.completion_barcode,
+        o.distance_km, o.distance_fee, o.work_type, o.work_fee,
+        o.product_total, o.total_payment,
+        CASE 
+          WHEN o.warranty_expired = true THEN 'Tugagan'
+          WHEN o.warranty_expired = false THEN 'Amal qilmoqda'
+          ELSE '-'
+        END as warranty_status
+       FROM orders o
+       JOIN masters m ON o.master_id = m.id
+       WHERE o.created_at >= $1 AND o.created_at < $2
+       ORDER BY o.created_at ASC`,
+      [startDate, endDate]
+    );
+    
+    if (orders.rows.length === 0) {
+      return ctx.editMessageText(
+        `📊 Oylik hisobot\n\n` +
+        `Yil: ${year}\n` +
+        `Oy: ${month}\n\n` +
+        `❌ Bu oy uchun buyurtmalar topilmadi`,
+        { reply_markup: new InlineKeyboard().text('🔙 Orqaga', 'back_to_admin') }
+      );
+    }
+    
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Oylik hisobot');
+    
+    // Set column headers
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 10 },
+      { header: 'Usta', key: 'master_name', width: 20 },
+      { header: 'Viloyat', key: 'region', width: 15 },
+      { header: 'Mijoz', key: 'client_name', width: 20 },
+      { header: 'Telefon', key: 'client_phone', width: 15 },
+      { header: 'Manzil', key: 'address', width: 25 },
+      { header: 'Mahsulot', key: 'product', width: 20 },
+      { header: 'Miqdor', key: 'quantity', width: 10 },
+      { header: 'Holat', key: 'status', width: 15 },
+      { header: 'Yaratilgan sana', key: 'created_at', width: 20 },
+      { header: 'Mahsulot sanasi', key: 'product_date', width: 15 },
+      { header: 'Barcode', key: 'barcode', width: 15 },
+      { header: 'Tugagan barcode', key: 'completion_barcode', width: 15 },
+      { header: 'Masofa (km)', key: 'distance_km', width: 12 },
+      { header: 'Masofa to\'lovi', key: 'distance_fee', width: 15 },
+      { header: 'Ish turi', key: 'work_type', width: 15 },
+      { header: 'Ish to\'lovi', key: 'work_fee', width: 15 },
+      { header: 'Mahsulot summasi', key: 'product_total', width: 15 },
+      { header: 'Umumiy to\'lov', key: 'total_payment', width: 15 },
+      { header: 'Kafolat', key: 'warranty_status', width: 15 }
+    ];
+    
+    // Status mapping
+    const statusMap = {
+      'new': 'Yangi',
+      'accepted': 'Qabul qilindi',
+      'on_way': 'Yo\'lda',
+      'arrived': 'Yetib keldi',
+      'delivered': 'Yetkazildi'
+    };
+    
+    // Add data rows
+    orders.rows.forEach(order => {
+      worksheet.addRow({
+        id: order.id,
+        master_name: order.master_name || '-',
+        region: order.region || '-',
+        client_name: order.client_name || '-',
+        client_phone: order.client_phone || '-',
+        address: order.address || '-',
+        product: order.product || '-',
+        quantity: order.quantity || 0,
+        status: statusMap[order.status] || order.status,
+        created_at: order.created_at ? new Date(order.created_at).toLocaleString('uz-UZ') : '-',
+        product_date: order.product_date ? new Date(order.product_date).toLocaleDateString('uz-UZ') : '-',
+        barcode: order.barcode || '-',
+        completion_barcode: order.completion_barcode || '-',
+        distance_km: order.distance_km || 0,
+        distance_fee: order.distance_fee || 0,
+        work_type: order.work_type || '-',
+        work_fee: order.work_fee || 0,
+        product_total: order.product_total || 0,
+        total_payment: order.total_payment || 0,
+        warranty_status: order.warranty_status
+      });
+    });
+    
+    // Calculate summary
+    const totalOrders = orders.rows.length;
+    const deliveredOrders = orders.rows.filter(o => o.status === 'delivered').length;
+    const totalPayment = orders.rows.reduce((sum, o) => sum + (o.total_payment || 0), 0);
+    const totalDistance = orders.rows.reduce((sum, o) => sum + (o.distance_km || 0), 0);
+    
+    // Add summary row
+    worksheet.addRow({});
+    worksheet.addRow({
+      id: 'JAMI:',
+      master_name: `${totalOrders} ta buyurtma`,
+      region: `${deliveredOrders} ta yetkazilgan`,
+      client_name: `Umumiy to'lov: ${totalPayment.toLocaleString()} so'm`,
+      address: `Jami masofa: ${totalDistance.toFixed(1)} km`
+    });
+    
+    const fileName = `oylik_hisobot_${year}_${month.toString().padStart(2, '0')}_${Date.now()}.xlsx`;
+    const filePath = path.join('/tmp', fileName);
+    
+    await workbook.xlsx.writeFile(filePath);
+    
+    try {
+      await ctx.replyWithDocument(
+        new InputFile(filePath, fileName),
+        { 
+          caption: `📊 Oylik hisobot\n\n` +
+            `📅 Sana: ${year}-${month.toString().padStart(2, '0')}\n` +
+            `📋 Jami buyurtmalar: ${totalOrders} ta\n` +
+            `✅ Yetkazilgan: ${deliveredOrders} ta\n` +
+            `💰 Umumiy to'lov: ${totalPayment.toLocaleString()} so'm\n` +
+            `📍 Jami masofa: ${totalDistance.toFixed(1)} km`,
+          reply_markup: getAdminMenu()
+        }
+      );
+    } finally {
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (cleanupError) {
+        console.error('Failed to cleanup temp file:', cleanupError);
+      }
+    }
+    
+    clearSession(ctx.from.id);
+  } catch (error) {
+    console.error('Report month callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery('back_to_admin', async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    clearSession(ctx.from.id);
+    ctx.editMessageText('Admin paneliga xush kelibsiz! 🔧', { reply_markup: getAdminMenu() });
+  } catch (error) {
+    console.error('Back to admin callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });

@@ -2101,18 +2101,78 @@ bot.callbackQuery(/^product:(.+)$/, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     const session = getSession(ctx.from.id);
-    session.data.product = ctx.match[1];
+    const productName = ctx.match[1];
     
-    await ctx.editMessageText(`✅ Tanlangan mahsulot: ${ctx.match[1]}`);
-    
-    if (isAdmin(ctx.from.id)) {
-      session.step = 'barcode';
-      ctx.reply('📊 Mahsulot shtrix kodini kiriting (kafolat tekshirish uchun):');
+    if (session.data.isChangingProduct) {
+      const orderId = session.data.changeOrderId;
+      
+      // Fetch old product and quantity
+      const order = await pool.query('SELECT product, quantity, distance_fee, work_fee FROM orders WHERE id = $1', [orderId]);
+      if (order.rows.length === 0) {
+        await ctx.editMessageText('Buyurtma topilmadi.');
+        return;
+      }
+      const oldProduct = order.rows[0].product;
+      const quantity = order.rows[0].quantity;
+      const distanceFee = order.rows[0].distance_fee || 0;
+      const workFee = order.rows[0].work_fee || 0;
+      
+      // Return old product to stock
+      await pool.query('UPDATE warehouse SET quantity = quantity + $1 WHERE name = $2', [quantity, oldProduct]);
+      
+      // Check new product stock
+      const stock = await pool.query('SELECT quantity FROM warehouse WHERE name = $1 LIMIT 1', [productName]);
+      if (stock.rows.length === 0 || stock.rows[0].quantity < quantity) {
+        await ctx.editMessageText('Omborda yetarli emas. O\'zgartirish bekor qilindi.');
+        // Return back
+        await pool.query('UPDATE warehouse SET quantity = quantity - $1 WHERE name = $2', [quantity, oldProduct]);
+        delete session.data.isChangingProduct;
+        delete session.data.changeOrderId;
+        return;
+      }
+      
+      // Deduct new product
+      await pool.query('UPDATE warehouse SET quantity = quantity - $1 WHERE name = $2', [quantity, productName]);
+      
+      // Get new price
+      const priceResult = await pool.query('SELECT price FROM warehouse WHERE name = $1 LIMIT 1', [productName]);
+      const newPrice = priceResult.rows[0].price;
+      const newProductTotal = newPrice * quantity;
+      
+      // Update order
+      await pool.query('UPDATE orders SET product = $1, product_total = $2, total_payment = $3 WHERE id = $4', 
+        [productName, newProductTotal, newProductTotal + distanceFee + workFee, orderId]);
+      
+      await ctx.editMessageText(`✅ Mahsulot o'zgartirildi: ${productName}\nYangi narx: ${newProductTotal.toLocaleString()} so'm`);
+      
+      // Clear flags
+      delete session.data.isChangingProduct;
+      delete session.data.changeOrderId;
+      
+      // Show work type keyboard again
+      const keyboard = new InlineKeyboard()
+        .text('🟢 Oson ish (100,000 so\'m)', `work_type:easy:${orderId}`)
+        .row()
+        .text('🔴 Murakkab ish (150,000 so\'m)', `work_type:difficult:${orderId}`)
+        .row()
+        .text('🔄 Mahsulot o\'zgartirish', `change_product:${orderId}`);
+      
+      ctx.reply('💼 Ish turini tanlang:', { reply_markup: keyboard });
     } else {
-      session.step = 'quantity';
-      ctx.reply('Miqdorni kiriting:');
+      session.data.product = productName;
+      
+      await ctx.editMessageText(`✅ Tanlangan mahsulot: ${productName}`);
+      
+      if (isAdmin(ctx.from.id)) {
+        session.step = 'barcode';
+        ctx.reply('📊 Mahsulot shtrix kodini kiriting (kafolat tekshirish uchun):');
+      } else {
+        session.step = 'quantity';
+        ctx.reply('Miqdorni kiriting:');
+      }
     }
   } catch (error) {
+    console.error('Product callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -2424,6 +2484,28 @@ bot.callbackQuery(/^work_type:(\w+):(\d+)$/, async (ctx) => {
   }
 });
 
+bot.callbackQuery(/^change_product:(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const orderId = ctx.match[1];
+    
+    const categories = await pool.query('SELECT DISTINCT category FROM warehouse ORDER BY category');
+    const keyboard = new InlineKeyboard();
+    categories.rows.forEach(row => {
+      keyboard.text(row.category, `product_cat:${row.category}`);
+    });
+    
+    const session = getSession(ctx.from.id);
+    session.data.isChangingProduct = true;
+    session.data.changeOrderId = orderId;
+    
+    await ctx.editMessageText('Yangi mahsulot kategoriyasini tanlang:', { reply_markup: keyboard });
+  } catch (error) {
+    console.error('Change product callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
 bot.callbackQuery(/^warranty_expired:(\d+)$/, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
@@ -2687,7 +2769,9 @@ bot.on('message:photo', async (ctx) => {
       const keyboard = new InlineKeyboard()
         .text('🟢 Oson ish (100,000 so\'m)', `work_type:easy:${session.data.orderId}`)
         .row()
-        .text('🔴 Murakkab ish (150,000 so\'m)', `work_type:difficult:${session.data.orderId}`);
+        .text('🔴 Murakkab ish (150,000 so\'m)', `work_type:difficult:${session.data.orderId}`)
+        .row()
+        .text('🔄 Mahsulot o\'zgartirish', `change_product:${session.data.orderId}`);
       
       ctx.reply('📸 Oldingi rasm saqlandi!\n\n💼 Ish turini tanlang:', { reply_markup: keyboard });
     } else if (session.step === 'after_photo') {

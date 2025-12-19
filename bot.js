@@ -2838,12 +2838,8 @@ bot.on('message:photo', async (ctx) => {
         }
       }
       
-      const keyboard = new InlineKeyboard()
-        .text('🟢 Oson ish (100,000 so\'m)', `work_type:easy:${session.data.orderId}`)
-        .row()
-        .text('🔴 Murakkab ish (150,000 so\'m)', `work_type:difficult:${session.data.orderId}`);
-      
-      ctx.reply('📸 Oldingi rasm saqlandi!\n\n💼 Ish turini tanlang:', { reply_markup: keyboard });
+      session.step = 'after_photo';
+      ctx.reply('📸 Oldingi rasm saqlandi!\n\n📸 Endi KEYINGI rasmni yuboring:');
     } else if (session.step === 'after_photo') {
       session.data.afterPhoto = fileId;
       const order = await pool.query(

@@ -164,6 +164,14 @@ function calculateDistance(lat1, lng1, lat2, lng2) {
   return R * c;
 }
 
+function calculateDistanceFee(distanceKm) {
+  return distanceKm * 3000;
+}
+
+function getWorkFee(workType) {
+  return workType === 'difficult' ? 150000 : 100000;
+}
+
 async function findClosestMaster(region, orderLat, orderLng, excludeTelegramIds = []) {
   try {
     let query = `SELECT id, telegram_id, name, phone, last_lat, last_lng, last_location_update 
@@ -1511,12 +1519,18 @@ bot.on('message:text', async (ctx) => {
         return ctx.reply(`Omborda yetarli emas. Mavjud: ${available} dona. Adminga xabar yuborildi.`, { reply_markup: replyMenu });
       }
       
+      const productPrice = await pool.query(
+        'SELECT price FROM warehouse WHERE name = $1 LIMIT 1',
+        [session.data.product]
+      );
+      const productTotal = (productPrice.rows.length > 0 ? parseFloat(productPrice.rows[0].price) : 0) * session.data.quantity;
+      
       const orderResult = await pool.query(
-        `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, quantity, status, master_telegram_id, barcode) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10) RETURNING id, created_at`,
+        `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, quantity, status, master_telegram_id, barcode, product_total) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', $9, $10, $11) RETURNING id, created_at`,
         [masterId, session.data.customerName, session.data.phone, 
          session.data.address, session.data.lat, session.data.lng,
-         session.data.product, session.data.quantity, masterTelegramId, session.data.barcode || null]
+         session.data.product, session.data.quantity, masterTelegramId, session.data.barcode || null, productTotal]
       );
       
       await pool.query(
@@ -2024,13 +2038,27 @@ bot.callbackQuery(/^accept_order:(\d+)$/, async (ctx) => {
       return ctx.reply('Bu buyurtma allaqachon boshqa usta tomonidan qabul qilingan.');
     }
     
+    const orderData = await pool.query(
+      'SELECT distance_km, distance_fee, product_total FROM orders WHERE id = $1',
+      [orderId]
+    );
+    
+    let distanceFeeText = '';
+    if (orderData.rows.length > 0) {
+      const distanceKm = orderData.rows[0].distance_km || 0;
+      const distanceFee = orderData.rows[0].distance_fee || 0;
+      if (distanceKm > 0) {
+        distanceFeeText = `\n💰 Masofa to'lovi: ${distanceFee.toLocaleString('uz-UZ')} so'm (~${distanceKm.toFixed(2)} km × 3,000 so'm)`;
+      }
+    }
+    
     rejectedOrderMasters.delete(orderId);
     
     await notifyAdmins(
       `✅ BUYURTMA QABUL QILINDI!\n\n` +
       `📋 Buyurtma ID: #${orderId}\n` +
       `👷 Usta: ${master.rows[0].name}\n` +
-      `⏰ Vaqt: ${new Date().toLocaleString('uz-UZ')}`
+      `⏰ Vaqt: ${new Date().toLocaleString('uz-UZ')}${distanceFeeText}`
     );
     
     const session = getSession(telegramId);
@@ -2042,6 +2070,7 @@ bot.callbackQuery(/^accept_order:(\d+)$/, async (ctx) => {
     
     ctx.reply(
       `✅ Buyurtma #${orderId} qabul qilindi!\n\n` +
+      `💰 Masofa to'lovi: ${(orderData.rows[0]?.distance_fee || 0).toLocaleString('uz-UZ')} so'm${distanceFeeText}\n\n` +
       `Yo'lga chiqsangiz "Yo'ldaman" tugmasini bosing.`,
       { reply_markup: keyboard }
     );
@@ -2164,6 +2193,35 @@ bot.callbackQuery(/^arrived:(\d+)$/, async (ctx) => {
     ctx.reply('📍 Yetib keldingiz! Holat yangilandi.\n\n📸 Ishni boshlashdan OLDINGI rasmni yuboring:');
   } catch (error) {
     console.error('Arrived callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^work_type:(\w+):(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const workType = ctx.match[1];
+    const orderId = ctx.match[2];
+    const workFee = getWorkFee(workType);
+    
+    await pool.query(
+      'UPDATE orders SET work_type = $1, work_fee = $2 WHERE id = $3',
+      [workType, workFee, orderId]
+    );
+    
+    const workTypeText = workType === 'difficult' ? '🔴 MURAKKAB ISH' : '🟢 OSON ISH';
+    const workFeeText = workFee.toLocaleString('uz-UZ');
+    
+    await ctx.editMessageText(
+      `${workTypeText}\n✅ Tanlandi!\n\n` +
+      `Ish turi to'lovi: ${workFeeText} so'm`
+    );
+    
+    const session = getSession(ctx.from.id);
+    session.step = 'after_photo';
+    ctx.reply('📸 Ishni YAKUNLASHDAN KEYINGI rasmni yuboring:');
+  } catch (error) {
+    console.error('Work type callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
@@ -2428,17 +2486,16 @@ bot.on('message:photo', async (ctx) => {
         }
       }
       
-      session.step = 'after_photo';
-      ctx.reply('📸 Oldingi rasm saqlandi!\n\nEndi ishdan KEYINGI rasmni yuboring:');
+      const keyboard = new InlineKeyboard()
+        .text('🟢 Oson ish (100,000 so\'m)', `work_type:easy:${session.data.orderId}`)
+        .row()
+        .text('🔴 Murakkab ish (150,000 so\'m)', `work_type:difficult:${session.data.orderId}`);
+      
+      ctx.reply('📸 Oldingi rasm saqlandi!\n\n💼 Ish turini tanlang:', { reply_markup: keyboard });
     } else if (session.step === 'after_photo') {
       session.data.afterPhoto = fileId;
-      await pool.query(
-        'UPDATE orders SET after_photo = $1 WHERE id = $2',
-        [fileId, session.data.orderId]
-      );
-      
       const order = await pool.query(
-        `SELECT o.*, m.name as master_name, m.region 
+        `SELECT o.*, m.name as master_name, m.region, m.last_lat, m.last_lng
          FROM orders o 
          JOIN masters m ON o.master_id = m.id 
          WHERE o.id = $1`,
@@ -2447,7 +2504,26 @@ bot.on('message:photo', async (ctx) => {
       
       if (order.rows.length > 0) {
         const od = order.rows[0];
+        let distanceKm = 0;
+        let distanceFee = 0;
+        
+        if (od.master_last_lat && od.master_last_lng && od.lat && od.lng) {
+          distanceKm = calculateDistance(od.master_last_lat, od.master_last_lng, od.lat, od.lng);
+          distanceFee = calculateDistanceFee(distanceKm);
+          
+          await pool.query(
+            'UPDATE orders SET after_photo = $1, distance_km = $2, distance_fee = $3 WHERE id = $4',
+            [fileId, distanceKm, distanceFee, session.data.orderId]
+          );
+        } else {
+          await pool.query(
+            'UPDATE orders SET after_photo = $1 WHERE id = $2',
+            [fileId, session.data.orderId]
+          );
+        }
+        
         try {
+          const distanceText = distanceKm > 0 ? `\n📍 Masofa: ~${distanceKm.toFixed(2)} km (${distanceFee.toLocaleString('uz-UZ')} so'm)` : '';
           await sendPhotoToAdmins(
             fileId,
             {
@@ -2457,7 +2533,7 @@ bot.on('message:photo', async (ctx) => {
                 `👷 Usta: ${od.master_name}\n` +
                 `📍 Viloyat: ${od.region || 'Noma\'lum'}\n` +
                 `👤 Mijoz: ${od.client_name}\n` +
-                `📦 Mahsulot: ${od.product}\n` +
+                `📦 Mahsulot: ${od.product}${distanceText}\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `📸 Ishdan KEYINGI rasm`
             }
@@ -2465,6 +2541,11 @@ bot.on('message:photo', async (ctx) => {
         } catch (adminError) {
           console.error('Failed to notify admin about after photo:', adminError);
         }
+      } else {
+        await pool.query(
+          'UPDATE orders SET after_photo = $1 WHERE id = $2',
+          [fileId, session.data.orderId]
+        );
       }
       
       session.step = 'completion_gps';

@@ -51,7 +51,13 @@ CREATE TABLE IF NOT EXISTS orders (
     completion_gps_lng DOUBLE PRECISION,
     master_telegram_id BIGINT,
     barcode TEXT,
-    completion_barcode TEXT
+    completion_barcode TEXT,
+    distance_km DOUBLE PRECISION DEFAULT 0,
+    distance_fee NUMERIC DEFAULT 0,
+    work_type TEXT DEFAULT NULL,
+    work_fee NUMERIC DEFAULT 0,
+    product_total NUMERIC DEFAULT 0,
+    total_payment NUMERIC DEFAULT 0
 );
 
 CREATE OR REPLACE FUNCTION decrease_stock(p_name TEXT, p_qty INT)

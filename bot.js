@@ -1416,6 +1416,34 @@ bot.on('message:text', async (ctx) => {
         [completionBarcode, orderId]
       );
       
+      // Recalculate mileage charge based on actual distance traveled
+      try {
+        const order = await pool.query(
+          `SELECT master_current_lat, master_current_lng, completion_gps_lat, completion_gps_lng, 
+                  product_total, work_fee 
+           FROM orders WHERE id = $1`,
+          [orderId]
+        );
+        
+        if (order.rows.length > 0) {
+          const { master_current_lat, master_current_lng, completion_gps_lat, completion_gps_lng, 
+                  product_total, work_fee } = order.rows[0];
+          
+          if (master_current_lat && master_current_lng && completion_gps_lat && completion_gps_lng) {
+            const distanceKm = calculateDistance(master_current_lat, master_current_lng, completion_gps_lat, completion_gps_lng);
+            const distanceFee = calculateDistanceFee(distanceKm);
+            const totalPayment = product_total + distanceFee + work_fee;
+            
+            await pool.query(
+              `UPDATE orders SET distance_km = $1, distance_fee = $2, total_payment = $3 WHERE id = $4`,
+              [distanceKm, distanceFee, totalPayment, orderId]
+            );
+          }
+        }
+      } catch (calcError) {
+        console.error('Error recalculating mileage:', calcError);
+      }
+      
       clearSession(ctx.from.id);
       
       ctx.reply('✅ Buyurtma muvaffaqiyatli yakunlandi!', { reply_markup: getMainMenu() });

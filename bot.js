@@ -1506,6 +1506,7 @@ bot.on('message:text', async (ctx) => {
         console.error('Failed to notify admin about completion:', adminError);
       }
     } else if (session.step === 'quantity') {
+      const telegramId = ctx.from.id;
       const quantity = parseInt(ctx.message.text);
       if (isNaN(quantity) || quantity <= 0) {
         return ctx.reply('Iltimos, to\'g\'ri miqdorni kiriting');

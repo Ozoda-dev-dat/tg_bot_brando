@@ -2507,8 +2507,8 @@ bot.on('message:photo', async (ctx) => {
         let distanceKm = 0;
         let distanceFee = 0;
         
-        if (od.master_last_lat && od.master_last_lng && od.lat && od.lng) {
-          distanceKm = calculateDistance(od.master_last_lat, od.master_last_lng, od.lat, od.lng);
+        if (od.last_lat && od.last_lng && od.lat && od.lng) {
+          distanceKm = calculateDistance(od.last_lat, od.last_lng, od.lat, od.lng);
           distanceFee = calculateDistanceFee(distanceKm);
           
           await pool.query(

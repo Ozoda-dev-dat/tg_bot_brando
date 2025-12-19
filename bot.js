@@ -2406,10 +2406,41 @@ bot.callbackQuery(/^arrived:(\d+)$/, async (ctx) => {
       [orderId]
     );
     
+    const order = await pool.query(
+      'SELECT product_date FROM orders WHERE id = $1',
+      [orderId]
+    );
+    
+    let warrantyStatus = 'unknown';
+    let warrantyMessage = '';
+    
+    if (order.rows.length > 0 && order.rows[0].product_date) {
+      const productDate = new Date(order.rows[0].product_date);
+      const currentDate = new Date();
+      const diffTime = Math.abs(currentDate - productDate);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const diffMonths = diffDays / 30;
+      
+      if (diffMonths < 2) {
+        warrantyStatus = 'valid';
+        warrantyMessage = `\n🛡️ ✅ Kafolat hali AMAL QILMOQDA (${Math.round(diffMonths * 10) / 10} oy)\n🎁 ISH TO'LOVI: BEPUL!`;
+      } else {
+        warrantyStatus = 'expired';
+        warrantyMessage = `\n🛡️ ❌ Kafolat TUGAGAN (${Math.round(diffMonths * 10) / 10} oy)\n💰 ISH TO'LOVI: TO'LANADI!`;
+      }
+    }
+    
     const session = getSession(ctx.from.id);
     session.data.orderId = orderId;
-    session.step = 'before_photo';
-    ctx.reply('📍 Yetib keldingiz! Holat yangilandi.\n\n📸 Ishni boshlashdan OLDINGI rasmni yuboring:');
+    session.data.warrantyStatus = warrantyStatus;
+    session.step = 'work_type_pending';
+    
+    const keyboard = new InlineKeyboard()
+      .text('🟢 OSON ISH (100,000 so\'m)', `work_type:easy:${orderId}`)
+      .row()
+      .text('🔴 MURAKKAB ISH (150,000 so\'m)', `work_type:difficult:${orderId}`);
+    
+    ctx.reply(`📍 Yetib keldingiz! Holat yangilandi.${warrantyMessage}\n\n💼 Ish turini tanlang:`, { reply_markup: keyboard });
   } catch (error) {
     console.error('Arrived callback error:', error);
     ctx.reply('Xatolik yuz berdi');
@@ -2422,10 +2453,26 @@ bot.callbackQuery(/^work_type:(\w+):(\d+)$/, async (ctx) => {
     const workType = ctx.match[1];
     const orderId = ctx.match[2];
     
-    const order = await pool.query('SELECT product_total, distance_fee FROM orders WHERE id = $1', [orderId]);
-    const { product_total, distance_fee } = order.rows[0];
+    const order = await pool.query('SELECT product_total, distance_fee, product_date FROM orders WHERE id = $1', [orderId]);
+    const { product_total, distance_fee, product_date } = order.rows[0];
     
-    let workFee = workType === 'difficult' ? 150000 : 100000;
+    let warrantyStatus = 'unknown';
+    let isWarrantyValid = false;
+    
+    if (product_date) {
+      const productDate = new Date(product_date);
+      const currentDate = new Date();
+      const diffTime = Math.abs(currentDate - productDate);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const diffMonths = diffDays / 30;
+      
+      isWarrantyValid = diffMonths < 2;
+    }
+    
+    let workFee = 0;
+    if (!isWarrantyValid) {
+      workFee = workType === 'difficult' ? 150000 : 100000;
+    }
     
     const totalPayment = product_total + distance_fee + workFee;
     
@@ -2435,7 +2482,7 @@ bot.callbackQuery(/^work_type:(\w+):(\d+)$/, async (ctx) => {
     );
     
     const workTypeText = workType === 'difficult' ? '🔴 MURAKKAB ISH' : '🟢 OSON ISH';
-    const workFeeText = workFee.toLocaleString('uz-UZ');
+    const workFeeText = workFee === 0 ? 'BEPUL ✅' : workFee.toLocaleString('uz-UZ') + ' so\'m';
     
     await ctx.editMessageText(
       `${workTypeText}\n✅ Tanlandi!\n\n` +
@@ -2443,8 +2490,9 @@ bot.callbackQuery(/^work_type:(\w+):(\d+)$/, async (ctx) => {
     );
     
     const session = getSession(ctx.from.id);
-    session.step = 'after_photo';
-    ctx.reply('📸 Ishni YAKUNLASHDAN KEYINGI rasmni yuboring:');
+    session.data.orderId = orderId;
+    session.step = 'before_photo';
+    ctx.reply('📸 Ishni boshlashdan OLDINGI rasmni yuboring:');
   } catch (error) {
     console.error('Work type callback error:', error);
     ctx.reply('Xatolik yuz berdi');

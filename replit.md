@@ -34,3 +34,11 @@ The bot runs via `node start.js` which:
 - Warehouse inventory per region
 - Excel import/export functionality
 - Admin panel for management
+- **Product Purchase Date Tracking**: Admin enters product purchase date during order creation
+- **Automatic Warranty Calculation**: System calculates warranty status (valid if < 2 months, expired if >= 2 months)
+- **Smart Work Fee System**:
+  - If warranty is valid (< 2 months): Service is FREE
+  - If warranty expired (>= 2 months): Master selects work type:
+    - Easy work: 100,000 soums
+    - Difficult work: 150,000 soums
+- **Work Type Selection**: After arriving at customer location, master selects work difficulty level with warranty status displayed

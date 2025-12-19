@@ -2284,14 +2284,28 @@ bot.callbackQuery(/^arrived:(\d+)$/, async (ctx) => {
     const session = getSession(ctx.from.id);
     session.data.orderId = orderId;
     session.data.warrantyStatus = warrantyStatus;
-    session.step = 'work_type_pending';
     
-    const keyboard = new InlineKeyboard()
-      .text('🟢 OSON ISH (100,000 so\'m)', `work_type:easy:${orderId}`)
-      .row()
-      .text('🔴 MURAKKAB ISH (150,000 so\'m)', `work_type:difficult:${orderId}`);
-    
-    ctx.reply(`📍 Yetib keldingiz! Holat yangilandi.${warrantyMessage}\n\n💼 Ish turini tanlang:`, { reply_markup: keyboard });
+    // If warranty is valid, skip work type selection (no payment needed)
+    if (warrantyStatus === 'valid') {
+      session.step = 'awaiting_completion';
+      
+      await pool.query(
+        'UPDATE orders SET work_type = $1, work_fee = $2, total_payment = product_total + distance_fee WHERE id = $3',
+        ['warranty', 0, orderId]
+      );
+      
+      ctx.reply(`📍 Yetib keldingiz! Holat yangilandi.${warrantyMessage}\n\n📸 Ishni tugatish uchun foto yuborish kerak...`);
+    } else {
+      // If warranty expired, ask about work difficulty
+      session.step = 'work_type_pending';
+      
+      const keyboard = new InlineKeyboard()
+        .text('🟢 OSON ISH (100,000 so\'m)', `work_type:easy:${orderId}`)
+        .row()
+        .text('🔴 MURAKKAB ISH (150,000 so\'m)', `work_type:difficult:${orderId}`);
+      
+      ctx.reply(`📍 Yetib keldingiz! Holat yangilandi.${warrantyMessage}\n\n💼 Ish turini tanlang:`, { reply_markup: keyboard });
+    }
   } catch (error) {
     console.error('Arrived callback error:', error);
     ctx.reply('Xatolik yuz berdi');

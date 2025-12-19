@@ -62,6 +62,10 @@ async function start() {
       console.log('  ✅ All required tables exist');
     }
 
+    // Ensure product_date column exists
+    await pool.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_date DATE;');
+    console.log('  ✅ Database schema up to date');
+
     await pool.end();
 
     // Start the bot

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS orders (
     lat DOUBLE PRECISION,
     lng DOUBLE PRECISION,
     product TEXT,
+    product_date DATE,
     quantity INT,
     status TEXT DEFAULT 'new',
     before_photo TEXT,

@@ -1484,7 +1484,8 @@ bot.on('message:text', async (ctx) => {
       
       session.data.quantity = quantity;
       
-      const telegramId = ctx.from.id;
+      session.step = 'product_date';
+      ctx.reply('Mahsulotning ishlab chiqarilgan yoki sotib olingan sanasini kiriting (YYYY-MM-DD formatda):');
       let masterId, masterName, masterPhone, masterRegion, masterTelegramId;
       
       if (session.data.selectedMasterId) {
@@ -1634,7 +1635,164 @@ bot.on('message:text', async (ctx) => {
       } catch (adminError) {
         console.error('Failed to notify admin:', adminError);
       }
-    }
+    } else if (session.step === 'product_date') {
+      const dateStr = ctx.message.text.trim();
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime()) || dateStr !== date.toISOString().split('T')[0]) {
+        return ctx.reply('Iltimos, to\'g\'ri sana formatida kiriting (masalan: 2023-12-19)');
+      }
+      session.data.productDate = dateStr;
+      
+      const telegramId = ctx.from.id;
+      let masterId, masterName, masterPhone, masterRegion, masterTelegramId;
+      
+      if (session.data.selectedMasterId) {
+        masterId = session.data.selectedMasterId;
+        masterName = session.data.selectedMasterName;
+        masterPhone = session.data.selectedMasterPhone;
+        masterRegion = session.data.selectedMasterRegion;
+        masterTelegramId = session.data.selectedMasterTelegramId;
+      } else {
+        const master = await pool.query(
+          'SELECT id, name, phone, region, telegram_id FROM masters WHERE telegram_id = $1',
+          [telegramId]
+        );
+        
+        if (master.rows.length === 0) {
+          clearSession(ctx.from.id);
+          return ctx.reply('Siz ro\'yxatdan o\'tmagansiz. Adminga murojaat qiling.');
+        }
+        
+        masterId = master.rows[0].id;
+        masterName = master.rows[0].name;
+        masterPhone = master.rows[0].phone;
+        masterRegion = master.rows[0].region;
+        masterTelegramId = master.rows[0].telegram_id;
+      }
+      
+      const stock = await pool.query(
+        `SELECT id, quantity, region FROM warehouse 
+         WHERE name = $1 AND (region = $2 OR region IS NULL)
+         ORDER BY CASE WHEN region = $2 THEN 0 ELSE 1 END
+         LIMIT 1`,
+        [session.data.product, masterRegion]
+      );
+      
+      const available = stock.rows.length > 0 ? stock.rows[0].quantity : 0;
+      const stockId = stock.rows.length > 0 ? stock.rows[0].id : null;
+      
+      if (stock.rows.length === 0 || available < quantity) {
+        const shortage = quantity - available;
+        
+        try {
+          await notifyAdmins(
+            `⚠️ OMBORDA MAHSULOT YETISHMAYAPTI!\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📍 Viloyat: ${masterRegion || 'Noma\'lum'}\n` +
+            `👷 Usta: ${masterName}\n` +
+            `📦 Mahsulot: ${session.data.product}\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `📊 Omborda mavjud: ${available} dona\n` +
+            `📋 Kerak: ${quantity} dona\n` +
+            `❗ Yetishmayapti: ${shortage} dona\n\n` +
+            `Iltimos, omborni to'ldiring!`
+          );
+        } catch (adminError) {
+          console.error('Failed to notify admin about shortage:', adminError);
+        }
+        
+        clearSession(ctx.from.id);
+        const replyMenu = isAdmin(telegramId) ? getAdminMenu() : getMainMenu();
+        return ctx.reply(`Omborda yetarli emas. Mavjud: ${available} dona. Adminga xabar yuborildi.`, { reply_markup: replyMenu });
+      }
+      
+      const productPrice = await pool.query(
+        'SELECT price FROM warehouse WHERE name = $1 LIMIT 1',
+        [session.data.product]
+      );
+      const productTotal = (productPrice.rows.length > 0 ? parseFloat(productPrice.rows[0].price) : 0) * session.data.quantity;
+      
+      const orderResult = await pool.query(
+        `INSERT INTO orders (master_id, client_name, client_phone, address, lat, lng, product, product_date, quantity, status, master_telegram_id, barcode, product_total) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'new', $10, $11, $12) RETURNING id, created_at`,
+        [masterId, session.data.customerName, session.data.phone, 
+         session.data.address, session.data.lat, session.data.lng,
+         session.data.product, session.data.productDate, session.data.quantity, masterTelegramId, session.data.barcode || null, productTotal]
+      );
+      
+      await pool.query(
+        'UPDATE warehouse SET quantity = quantity - $1 WHERE id = $2',
+        [session.data.quantity, stockId]
+      );
+      
+      session.data.orderId = orderResult.rows[0].id;
+      
+      if (isAdmin(telegramId)) {
+        clearSession(ctx.from.id);
+        
+        const barcodeInfo = session.data.barcode ? `\n📊 Shtrix kod: ${session.data.barcode}` : '';
+        
+        const notifyResult = await notifyClosestMaster(masterRegion, orderResult.rows[0].id, {
+          clientName: session.data.customerName,
+          product: session.data.product,
+          address: session.data.address,
+          barcode: session.data.barcode
+        }, session.data.lat, session.data.lng);
+        
+        if (notifyResult.closestMaster) {
+          ctx.reply(`✅ Buyurtma yaratildi!\n\n📋 Buyurtma ID: #${orderResult.rows[0].id}\n👷 Tanlangan usta: ${masterName}\n📦 Mahsulot: ${session.data.product}\n📊 Miqdor: ${session.data.quantity} dona${barcodeInfo}\n\n📍 Eng yaqin usta (${notifyResult.closestMaster.name}, ~${notifyResult.distance} km) xabardor qilindi!`, { reply_markup: getAdminMenu() });
+        } else {
+          ctx.reply(`✅ Buyurtma yaratildi!\n\n📋 Buyurtma ID: #${orderResult.rows[0].id}\n👷 Usta: ${masterName}\n📦 Mahsulot: ${session.data.product}\n📊 Miqdor: ${session.data.quantity} dona${barcodeInfo}\n\n📍 Barcha ${masterRegion} ustalariga joylashuv so'rovi yuborildi!`, { reply_markup: getAdminMenu() });
+        }
+      } else {
+        session.step = 'on_way_pending';
+        
+        const keyboard = new InlineKeyboard()
+          .text('Yo\'ldaman', `on_way:${session.data.orderId}`);
+        
+        ctx.reply('Buyurtma yaratildi!', { reply_markup: keyboard });
+      }
+      
+      try {
+        const orderDate = orderResult.rows[0].created_at.toLocaleString('uz-UZ', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        
+        const locationInfo = session.data.lat && session.data.lng 
+          ? `📍 GPS: ${session.data.lat}, ${session.data.lng}\n` 
+          : '';
+        
+        const barcodeAdminInfo = session.data.barcode 
+          ? `   📊 Shtrix kod: ${session.data.barcode}\n` 
+          : '';
+        
+        await notifyAdmins(
+          `🆕 Yangi buyurtma yaratildi:\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `📋 Buyurtma ID: #${orderResult.rows[0].id}\n` +
+          `📅 Sana: ${orderDate}\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `👷 USTA MA'LUMOTLARI:\n` +
+          `   Ism: ${masterName}\n` +
+          `   Tel: ${masterPhone || 'Kiritilmagan'}\n` +
+          `   Viloyat: ${masterRegion || 'Kiritilmagan'}\n\n` +
+          `👤 MIJOZ MA'LUMOTLARI:\n` +
+          `   Ism: ${session.data.customerName}\n` +
+          `   Tel: ${session.data.phone}\n` +
+          `   Manzil: ${session.data.address}\n` +
+          locationInfo + `\n` +
+          `📦 BUYURTMA:\n` +
+          `   Mahsulot: ${session.data.product}\n` +
+          `   Miqdor: ${session.data.quantity} dona\n` +
+          barcodeAdminInfo
+        );
+      } catch (adminError) {
+        console.error('Failed to notify admin:', adminError);
+      }
   } catch (error) {
     console.error('Message text handler error:', error);
     ctx.reply('Xatolik yuz berdi');
@@ -2230,19 +2388,31 @@ bot.callbackQuery(/^work_type:(\w+):(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const workType = ctx.match[1];
     const orderId = ctx.match[2];
-    const workFee = getWorkFee(workType);
+    
+    const order = await pool.query('SELECT product_date, product_total, distance_fee FROM orders WHERE id = $1', [orderId]);
+    const { product_date, product_total, distance_fee } = order.rows[0];
+    
+    const now = new Date();
+    const months = (now - new Date(product_date)) / (1000 * 60 * 60 * 24 * 30.44);
+    
+    let workFee = 0;
+    if (months >= 2) {
+      workFee = workType === 'difficult' ? 150000 : 100000;
+    }
+    
+    const totalPayment = product_total + distance_fee + workFee;
     
     await pool.query(
-      'UPDATE orders SET work_type = $1, work_fee = $2 WHERE id = $3',
-      [workType, workFee, orderId]
+      'UPDATE orders SET work_type = $1, work_fee = $2, total_payment = $3 WHERE id = $4',
+      [workType, workFee, totalPayment, orderId]
     );
     
     const workTypeText = workType === 'difficult' ? '🔴 MURAKKAB ISH' : '🟢 OSON ISH';
-    const workFeeText = workFee.toLocaleString('uz-UZ');
+    const workFeeText = workFee === 0 ? 'Bepul (kafolat davrida)' : `${workFee.toLocaleString('uz-UZ')} so'm`;
     
     await ctx.editMessageText(
       `${workTypeText}\n✅ Tanlandi!\n\n` +
-      `Ish turi to'lovi: ${workFeeText} so'm`
+      `Ish turi to'lovi: ${workFeeText}`
     );
     
     const session = getSession(ctx.from.id);

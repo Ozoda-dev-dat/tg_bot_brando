@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ override: false });
 const fs = require('fs');
 const { Pool } = require('pg');
 
@@ -23,10 +23,9 @@ async function start() {
   }
 
   if (missingVars.length > 0) {
-    console.error('\n❌ Missing required environment variables:\n');
-    console.error(missingVars.join('\n'));
-    console.error('\n📝 Please set these environment variables in the Secrets tab and restart.\n');
-    process.exit(1);
+    console.warn('\n⚠️  Some environment variables may not be set:\n');
+    console.warn(missingVars.join('\n'));
+    console.warn('\n📝 If the bot isn\'t responding, please set these in the Secrets tab.\n');
   }
 
   // Check database connection and schema

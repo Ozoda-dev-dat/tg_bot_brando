@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ override: false });
 const grammy = require('grammy');
 const Bot = grammy.Bot;
 const { InlineKeyboard, Keyboard, InputFile } = require('grammy');
@@ -10,14 +10,25 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 
-const bot = global.botInstance || new Bot(process.env.BOT_TOKEN);
-const pool = global.poolInstance || new Pool({ connectionString: process.env.DATABASE_URL });
+let bot, pool;
 
-if (global.botInstance) {
+try {
+  bot = global.botInstance || new Bot(process.env.BOT_TOKEN || '');
+  pool = global.poolInstance || new Pool({ connectionString: process.env.DATABASE_URL });
+  
+  if (global.botInstance) {
     console.log("⚠️ Bot already initialized, reusing existing instance.");
-} else {
+  } else {
     global.botInstance = bot;
     global.poolInstance = pool;
+  }
+} catch (error) {
+  if (error.message && error.message.includes('token')) {
+    console.warn('⚠️ BOT_TOKEN not set - bot will not respond to messages');
+    console.warn('   Please set BOT_TOKEN in Secrets and restart');
+    process.exit(0);
+  }
+  throw error;
 }
 
 

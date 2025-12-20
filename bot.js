@@ -2124,17 +2124,28 @@ bot.callbackQuery(/^accept_order:(\d+)$/, async (ctx) => {
     }
     
     const orderData = await pool.query(
-      'SELECT distance_km, distance_fee, product_total FROM orders WHERE id = $1',
+      'SELECT distance_km, distance_fee, product_total, work_fee FROM orders WHERE id = $1',
       [orderId]
     );
     
     let distanceFeeText = '';
+    let paymentDetails = '';
     if (orderData.rows.length > 0) {
       const distanceKm = orderData.rows[0].distance_km || 0;
       const distanceFee = orderData.rows[0].distance_fee || 0;
+      const productTotal = orderData.rows[0].product_total || 0;
+      const workFee = orderData.rows[0].work_fee || 0;
+      const totalPayment = distanceFee + productTotal + workFee;
+      
       if (distanceKm > 0) {
         distanceFeeText = `\n💰 Masofa to'lovi: ${distanceFee.toLocaleString('uz-UZ')} so'm (~${distanceKm.toFixed(2)} km × 3,000 so'm)`;
       }
+      
+      paymentDetails = `💰 Masofa to'lovi: ${distanceFee.toLocaleString('uz-UZ')} so'm\n` +
+                      `📦 Mahsulot summasi: ${productTotal.toLocaleString('uz-UZ')} so'm\n` +
+                      `🔧 Ish to'lovi: ${workFee.toLocaleString('uz-UZ')} so'm\n` +
+                      `━━━━━━━━━━━━━━━━━━━━\n` +
+                      `💵 JAMI TO'LOV: ${totalPayment.toLocaleString('uz-UZ')} so'm`;
     }
     
     rejectedOrderMasters.delete(orderId);
@@ -2155,7 +2166,7 @@ bot.callbackQuery(/^accept_order:(\d+)$/, async (ctx) => {
     
     ctx.reply(
       `✅ Buyurtma #${orderId} qabul qilindi!\n\n` +
-      `💰 Masofa to'lovi: ${(orderData.rows[0]?.distance_fee || 0).toLocaleString('uz-UZ')} so'm${distanceFeeText}\n\n` +
+      `${paymentDetails}\n\n` +
       `Yo'lga chiqsangiz "Yo'ldaman" tugmasini bosing.`,
       { reply_markup: keyboard }
     );

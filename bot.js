@@ -374,8 +374,8 @@ function getAdminMenu() {
     .text('➕ Usta qo\'shish').text('➕ Mahsulot qo\'shish').row()
     .text('📥 Excel import').text('📋 Barcha buyurtmalar').row()
     .text('👥 Barcha ustalar').text('📦 Ombor').row()
-    .text('� Oylik hisobot').row()
-    .text('�🔙 Orqaga')
+    .text('📊 Oylik hisobot').row()
+    .text('🔙 Orqaga')
     .resized()
     .persistent();
 }

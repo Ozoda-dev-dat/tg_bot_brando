@@ -1838,14 +1838,29 @@ bot.on('message:location', async (ctx) => {
         [completionLat, completionLng, session.data.orderId]
       );
       
-      session.step = 'warranty_question';
+      // Get warranty status from database
+      const orderData = await pool.query(
+        'SELECT warranty_expired FROM orders WHERE id = $1',
+        [session.data.orderId]
+      );
       
-      const keyboard = new InlineKeyboard()
-        .text('✅ Ha, kafolat muddati tugagan', `warranty_expired:${session.data.orderId}`)
-        .row()
-        .text('❌ Yo\'q, kafolat hali amal qilmoqda', `warranty_valid:${session.data.orderId}`);
+      ctx.reply('📍 Joylashuv saqlandi!');
       
-      ctx.reply('📍 Joylashuv saqlandi!\n\nMahsulot kafolat muddati tugaganmi?', { reply_markup: keyboard });
+      if (orderData.rows.length > 0 && orderData.rows[0].warranty_expired === false) {
+        // Warranty is valid - ask for spare parts photo
+        session.step = 'spare_part_photo';
+        ctx.reply('⚠️ Kafolat hali amal qilmoqda!\n\n' +
+          'Eski ehtiyot qismni yangi bilan almashtirishingiz kerak.\n' +
+          'Eski qismni katta omborga yuborishingiz kerak.\n\n' +
+          '📸 Iltimos, eski ehtiyot qism rasmini yuboring:');
+      } else {
+        // Warranty is expired or not set - finish order
+        session.step = 'finish_order_ready';
+        const keyboard = new InlineKeyboard()
+          .text('✅ Buyurtmani yakunlash', `finish_order:${session.data.orderId}`);
+        
+        ctx.reply('🛡️ Kafolat muddati tugagan. Buyurtmani yakunlash uchun tugmani bosing:', { reply_markup: keyboard });
+      }
     }
   } catch (error) {
     console.error('Location handler error:', error);
@@ -2364,53 +2379,6 @@ bot.callbackQuery(/^work_type:(\w+):(\d+)$/, async (ctx) => {
   }
 });
 
-bot.callbackQuery(/^warranty_expired:(\d+)$/, async (ctx) => {
-  try {
-    await ctx.answerCallbackQuery();
-    const orderId = ctx.match[1];
-    
-    await pool.query(
-      'UPDATE orders SET warranty_expired = TRUE WHERE id = $1',
-      [orderId]
-    );
-    
-    const session = getSession(ctx.from.id);
-    session.data.orderId = orderId;
-    session.step = 'finish_order_ready';
-    
-    const keyboard = new InlineKeyboard()
-      .text('✅ Buyurtmani yakunlash', `finish_order:${orderId}`);
-    
-    ctx.reply('Kafolat muddati tugagan deb belgilandi.\n\nBuyurtmani yakunlash uchun tugmani bosing:', { reply_markup: keyboard });
-  } catch (error) {
-    console.error('Warranty expired callback error:', error);
-    ctx.reply('Xatolik yuz berdi');
-  }
-});
-
-bot.callbackQuery(/^warranty_valid:(\d+)$/, async (ctx) => {
-  try {
-    await ctx.answerCallbackQuery();
-    const orderId = ctx.match[1];
-    
-    await pool.query(
-      'UPDATE orders SET warranty_expired = FALSE WHERE id = $1',
-      [orderId]
-    );
-    
-    const session = getSession(ctx.from.id);
-    session.data.orderId = orderId;
-    session.step = 'spare_part_photo';
-    
-    ctx.reply('⚠️ Kafolat hali amal qilmoqda!\n\n' +
-      'Eski ehtiyot qismni yangi bilan almashtirishingiz kerak.\n' +
-      'Eski qismni katta omborga yuborishingiz kerak.\n\n' +
-      '📸 Iltimos, eski ehtiyot qism rasmini yuboring:');
-  } catch (error) {
-    console.error('Warranty valid callback error:', error);
-    ctx.reply('Xatolik yuz berdi');
-  }
-});
 
 bot.callbackQuery(/^accept_spare_part:(\d+)$/, async (ctx) => {
   try {

@@ -1486,11 +1486,9 @@ bot.on('message:text', async (ctx) => {
       
       clearSession(ctx.from.id);
       
-      ctx.reply('✅ Buyurtma muvaffaqiyatli yakunlandi!', { reply_markup: getMainMenu() });
-      
       try {
         const orderDetails = await pool.query(
-          `SELECT o.*, m.name as master_name 
+          `SELECT o.*, m.name as master_name, m.telegram_id as master_telegram_id
            FROM orders o 
            JOIN masters m ON o.master_id = m.id 
            WHERE o.id = $1`,
@@ -1500,7 +1498,54 @@ bot.on('message:text', async (ctx) => {
         if (orderDetails.rows.length > 0) {
           const od = orderDetails.rows[0];
           const warrantyStatus = od.warranty_expired ? 'Tugagan' : 'Amal qilmoqda';
+          const workTypeText = od.work_type === 'difficult' ? 'Qiyin' : 'Oddiy';
           
+          // Format payment breakdown for master
+          let paymentMessage = `💰 TO'LOV HISOB-KITOBINI:\n\n`;
+          paymentMessage += `━━━━━━━━━━━━━━━━━━━━\n`;
+          paymentMessage += `📋 Buyurtma ID: #${orderId}\n`;
+          paymentMessage += `👤 Mijoz: ${od.client_name}\n`;
+          paymentMessage += `📦 Mahsulot: ${od.product}\n\n`;
+          
+          paymentMessage += `📊 TO'LOV TAFSILOTI:\n`;
+          paymentMessage += `━━━━━━━━━━━━━━━━━━━━\n`;
+          
+          // Product total
+          const productTotal = od.product_total || 0;
+          paymentMessage += `📦 Mahsulot summasi:\n`;
+          paymentMessage += `   ${productTotal.toLocaleString('uz-UZ')} so'm\n\n`;
+          
+          // Distance fee
+          const distanceFee = od.distance_fee || 0;
+          const distanceKm = od.distance_km || 0;
+          paymentMessage += `🚗 Masofa to'lovi:\n`;
+          paymentMessage += `   ${distanceKm.toFixed(2)} km × 3,000 so'm/km\n`;
+          paymentMessage += `   = ${distanceFee.toLocaleString('uz-UZ')} so'm\n\n`;
+          
+          // Work fee
+          const workFee = od.work_fee || 0;
+          paymentMessage += `🔧 Ish to'lovi (${workTypeText}):\n`;
+          paymentMessage += `   ${workFee.toLocaleString('uz-UZ')} so'm\n\n`;
+          
+          // Total payment
+          const totalPayment = od.total_payment || (productTotal + distanceFee + workFee);
+          paymentMessage += `━━━━━━━━━━━━━━━━━━━━\n`;
+          paymentMessage += `💵 JAMI TO'LOV:\n`;
+          paymentMessage += `   ${totalPayment.toLocaleString('uz-UZ')} so'm\n`;
+          paymentMessage += `━━━━━━━━━━━━━━━━━━━━`;
+          
+          ctx.reply('✅ Buyurtma muvaffaqiyatli yakunlandi!\n\n' + paymentMessage, { reply_markup: getMainMenu() });
+          
+          // Also send the payment breakdown directly to the master
+          if (od.master_telegram_id && od.master_telegram_id !== ctx.from.id) {
+            try {
+              await bot.api.sendMessage(od.master_telegram_id, '✅ Buyurtmaniz yakunlandi!\n\n' + paymentMessage);
+            } catch (masterNotifyError) {
+              console.error('Failed to notify master about payment:', masterNotifyError);
+            }
+          }
+          
+          // Notify admin with payment details
           await notifyAdmins(
             `✅ BUYURTMA YAKUNLANDI!\n\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1509,8 +1554,14 @@ bot.on('message:text', async (ctx) => {
             `👤 Mijoz: ${od.client_name}\n` +
             `📦 Mahsulot: ${od.product}\n` +
             `🛡️ Kafolat: ${warrantyStatus}\n` +
-            `📊 Shtrix kod: ${completionBarcode}\n` +
-            `━━━━━━━━━━━━━━━━━━━━`
+            `📊 Shtrix kod: ${completionBarcode}\n\n` +
+            `💰 USTA UCHUN TO'LOV:\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📦 Mahsulot: ${productTotal.toLocaleString('uz-UZ')} so'm\n` +
+            `🚗 Masofa (${distanceKm.toFixed(2)} km): ${distanceFee.toLocaleString('uz-UZ')} so'm\n` +
+            `🔧 Ish (${workTypeText}): ${workFee.toLocaleString('uz-UZ')} so'm\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `💵 JAMI: ${totalPayment.toLocaleString('uz-UZ')} so'm`
           );
         }
       } catch (adminError) {

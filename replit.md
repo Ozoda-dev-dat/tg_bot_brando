@@ -24,7 +24,7 @@ A Telegram bot for delivery management using Grammy framework with PostgreSQL da
 ## Database Tables
 - `masters` - Delivery workers with location tracking
 - `warehouse` - Product inventory by region
-- `orders` - Delivery orders with status tracking
+- `orders` - Delivery orders with status tracking and payment details
 - `clients` - Customer information
 
 ## Running the Bot
@@ -35,16 +35,23 @@ The bot runs via the "Telegram Bot" workflow which executes `node start.js`. It 
 4. Starts the Telegram bot
 
 ## Features
-### Payment Breakdown
-When an order is completed by a master:
-- **Master receives**: A detailed payment breakdown showing:
-  - Product total (quantity × price)
-  - Distance fee (distance in km × 3,000 som/km)
-  - Work fee (based on difficulty: 100,000 som for normal, 150,000 som for difficult)
-  - **Total payment** due to the master
-- **Admin receives**: The same breakdown to track payments and manage finances
-- **Payment Details**: All breakdown info is stored in the database for reporting
+
+### Master Payment Breakdown
+When an order is completed, the master receives a detailed payment breakdown showing:
+- **Product Amount**: Total cost of products delivered
+- **Distance Fee**: Based on actual distance traveled (3,000 so'm per km)
+- **Work Fee**: Varies by work type (difficult: 150,000 so'm, normal: 100,000 so'm)
+- **Total Payment**: Sum of all fees
+
+The admin is also notified with the same payment details for tracking and financial management.
+
+### Monthly Financial Reports
+Admins can download monthly financial statements as Excel files:
+- Access via "📊 Oylik hisobot" (Monthly Report) button in admin menu
+- Select year and month
+- File includes all orders with complete payment details and summary totals
+- Columns include: Order ID, Master, Region, Client, Address, Product, Quantity, Status, Dates, Payment Details, Warranty Status
 
 ## Recent Changes
-- December 20, 2025: Initial Replit setup with PostgreSQL database
-- December 20, 2025: Added payment breakdown feature with master and admin notifications
+- December 20, 2025: Added payment breakdown notifications for masters and admins when orders are completed
+- December 20, 2025: Initial Replit setup with PostgreSQL database and monthly report feature

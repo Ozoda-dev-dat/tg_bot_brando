@@ -26,6 +26,12 @@ async function setupDatabase() {
     await pool.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS work_fee NUMERIC DEFAULT 0;');
     await pool.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_total NUMERIC DEFAULT 0;');
     await pool.query('ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_payment NUMERIC DEFAULT 0;');
+    // Yangi: Before_photo ni olib tashladik, faqat completion_photo (after_photo o'rniga)
+    await pool.query('ALTER TABLE orders DROP COLUMN IF EXISTS before_photo;');
+    await pool.query('ALTER TABLE orders RENAME COLUMN after_photo TO completion_photo;');
+    // Yangi: Masters ga service center lokatsiyasi
+    await pool.query('ALTER TABLE masters ADD COLUMN IF NOT EXISTS service_center_lat DOUBLE PRECISION;');
+    await pool.query('ALTER TABLE masters ADD COLUMN IF NOT EXISTS service_center_lng DOUBLE PRECISION;');
     console.log('✅ Database schema yaratildi!');
     process.exit(0);
   } catch (error) {

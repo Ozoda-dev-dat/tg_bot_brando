@@ -1,9 +1,19 @@
+CREATE TABLE IF NOT EXISTS service_centers (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    region TEXT NOT NULL,
+    lat DOUBLE PRECISION NOT NULL,
+    lng DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS masters (
     id SERIAL PRIMARY KEY,
     name TEXT,
     phone TEXT UNIQUE,
     telegram_id BIGINT UNIQUE,
     region TEXT,
+    service_center_id INT REFERENCES service_centers(id),
     last_lat DOUBLE PRECISION,
     last_lng DOUBLE PRECISION,
     last_location_update TIMESTAMP

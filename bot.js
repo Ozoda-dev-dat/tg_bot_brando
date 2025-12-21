@@ -1456,21 +1456,25 @@ bot.on('message:text', async (ctx) => {
         [completionBarcode, orderId]
       );
       
-      // Recalculate mileage charge based on actual distance traveled
+      // Recalculate mileage charge based on service center location
       try {
         const order = await pool.query(
-          `SELECT master_current_lat, master_current_lng, completion_gps_lat, completion_gps_lng, 
-                  product_total, work_fee 
-           FROM orders WHERE id = $1`,
+          `SELECT o.completion_gps_lat, o.completion_gps_lng, o.product_total, o.work_fee, 
+                  m.service_center_id, sc.lat as service_center_lat, sc.lng as service_center_lng
+           FROM orders o
+           JOIN masters m ON o.master_id = m.id
+           LEFT JOIN service_centers sc ON m.service_center_id = sc.id
+           WHERE o.id = $1`,
           [orderId]
         );
         
         if (order.rows.length > 0) {
-          const { master_current_lat, master_current_lng, completion_gps_lat, completion_gps_lng, 
-                  product_total, work_fee } = order.rows[0];
+          const { completion_gps_lat, completion_gps_lng, product_total, work_fee, 
+                  service_center_lat, service_center_lng } = order.rows[0];
           
-          if (master_current_lat && master_current_lng && completion_gps_lat && completion_gps_lng) {
-            const distanceKm = calculateDistance(master_current_lat, master_current_lng, completion_gps_lat, completion_gps_lng);
+          // Calculate distance from service center to order location
+          if (service_center_lat && service_center_lng && completion_gps_lat && completion_gps_lng) {
+            const distanceKm = calculateDistance(service_center_lat, service_center_lng, completion_gps_lat, completion_gps_lng);
             const distanceFee = calculateDistanceFee(distanceKm);
             const totalPayment = product_total + distanceFee + work_fee;
             
@@ -2884,9 +2888,11 @@ bot.on('message:photo', async (ctx) => {
     } else if (session.step === 'after_photo') {
       session.data.afterPhoto = fileId;
       const order = await pool.query(
-        `SELECT o.*, m.name as master_name, m.region, m.last_lat, m.last_lng
+        `SELECT o.*, m.name as master_name, m.region, m.service_center_id,
+                sc.lat as service_center_lat, sc.lng as service_center_lng
          FROM orders o 
          JOIN masters m ON o.master_id = m.id 
+         LEFT JOIN service_centers sc ON m.service_center_id = sc.id
          WHERE o.id = $1`,
         [session.data.orderId]
       );
@@ -2896,8 +2902,9 @@ bot.on('message:photo', async (ctx) => {
         let distanceKm = 0;
         let distanceFee = 0;
         
-        if (od.last_lat && od.last_lng && od.lat && od.lng) {
-          distanceKm = calculateDistance(od.last_lat, od.last_lng, od.lat, od.lng);
+        // Use service center location if available, otherwise skip distance calculation
+        if (od.service_center_lat && od.service_center_lng && od.lat && od.lng) {
+          distanceKm = calculateDistance(od.service_center_lat, od.service_center_lng, od.lat, od.lng);
           distanceFee = calculateDistanceFee(distanceKm);
           
           await pool.query(

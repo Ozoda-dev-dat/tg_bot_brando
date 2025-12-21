@@ -374,7 +374,7 @@ function getAdminMenu() {
     .text('➕ Usta qo\'shish').text('➕ Mahsulot qo\'shish').row()
     .text('📥 Excel import').text('📋 Barcha buyurtmalar').row()
     .text('👥 Barcha ustalar').text('📦 Ombor').row()
-    .text('📊 Oylik hisobot').row()
+    .text('📅 Kunlik hisobot').text('📊 Oylik hisobot').row()
     .text('🔙 Orqaga')
     .resized()
     .persistent();
@@ -857,6 +857,153 @@ bot.hears('📋 Barcha buyurtmalar', async (ctx) => {
     ctx.reply(message);
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('📅 Kunlik hisobot', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    ctx.reply('⏳ Kunlik hisobot tayyorlanmoqda...');
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const orders = await pool.query(
+      `SELECT o.id, m.name as master_name, m.region, o.client_name, o.address, 
+              o.product, o.status, o.created_at, o.distance_km, o.distance_fee, 
+              o.work_fee, o.product_total, o.total_payment
+       FROM orders o
+       LEFT JOIN masters m ON o.master_id = m.id
+       WHERE o.created_at >= $1 AND o.created_at < $2
+       ORDER BY o.created_at ASC`,
+      [today, tomorrow]
+    );
+    
+    const masters = await pool.query(
+      `SELECT DISTINCT m.id, m.name
+       FROM masters m
+       ORDER BY m.name`
+    );
+    
+    const statuses = {
+      'new': 'Yangi',
+      'accepted': 'Qabul qilindi',
+      'on_way': 'Yo\'lda',
+      'arrived': 'Yetib keldi',
+      'in_progress': 'Jarayonda',
+      'completed': 'Yakunlangan',
+      'delivered': 'Yetkazildi'
+    };
+    
+    let report = '📅 KUNLIK HISOBOT\n';
+    report += `📆 Sana: ${today.toLocaleDateString('uz-UZ')}\n`;
+    report += '═══════════════════════════════\n\n';
+    
+    if (orders.rows.length === 0) {
+      report += '❌ Bugun buyurtmalar yo\'q\n';
+    } else {
+      report += `📊 BUYURTMALAR STATISTIKASI:\n`;
+      report += `• Jami: ${orders.rows.length} ta buyurtma\n`;
+      
+      const statusCounts = {};
+      orders.rows.forEach(o => {
+        const status = statuses[o.status] || o.status;
+        statusCounts[status] = (statusCounts[status] || 0) + 1;
+      });
+      
+      Object.entries(statusCounts).forEach(([status, count]) => {
+        report += `• ${status}: ${count} ta\n`;
+      });
+      
+      report += '\n🗺️ BUYURTMALAR GEOGRAFIYASI:\n';
+      const regionMap = {};
+      orders.rows.forEach(o => {
+        const region = o.region || 'Hudud kiritilmagan';
+        regionMap[region] = (regionMap[region] || 0) + 1;
+      });
+      
+      Object.entries(regionMap).forEach(([region, count]) => {
+        report += `• ${region}: ${count} ta\n`;
+      });
+      
+      report += '\n✅ YAKUNLANGAN BUYURTMALAR:\n';
+      const completedOrders = orders.rows.filter(o => o.status === 'delivered' || o.status === 'completed');
+      if (completedOrders.length === 0) {
+        report += '• Hech qanday buyurtma yakunlanmagan\n';
+      } else {
+        report += `• Jami yakunlangan: ${completedOrders.length} ta\n`;
+      }
+      
+      report += '\n💼 USTALAR BO\'YICHA TAHLIL:\n';
+      const masterStats = {};
+      orders.rows.forEach(o => {
+        const masterName = o.master_name || 'Tayinlanmagan';
+        if (!masterStats[masterName]) {
+          masterStats[masterName] = {
+            total: 0,
+            completed: 0,
+            distance: 0,
+            distanceFee: 0,
+            workFee: 0,
+            productTotal: 0,
+            totalPayment: 0
+          };
+        }
+        masterStats[masterName].total++;
+        if (o.status === 'delivered' || o.status === 'completed') {
+          masterStats[masterName].completed++;
+        }
+        masterStats[masterName].distance += o.distance_km || 0;
+        masterStats[masterName].distanceFee += o.distance_fee || 0;
+        masterStats[masterName].workFee += o.work_fee || 0;
+        masterStats[masterName].productTotal += o.product_total || 0;
+        masterStats[masterName].totalPayment += o.total_payment || 0;
+      });
+      
+      Object.entries(masterStats).forEach(([masterName, stats]) => {
+        report += `\n👷 ${masterName}:\n`;
+        report += `  • Buyurtmalar: ${stats.total} ta (yakunlangan: ${stats.completed} ta)\n`;
+        report += `  • Masofa: ${stats.distance.toFixed(1)} km\n`;
+        report += `  💰 Masofa to\'lovi: ${Math.round(stats.distanceFee).toLocaleString()} so'm\n`;
+        report += `  💰 Ish to\'lovi: ${Math.round(stats.workFee).toLocaleString()} so'm\n`;
+        report += `  💰 Mahsulot summasi: ${Math.round(stats.productTotal).toLocaleString()} so'm\n`;
+        report += `  💰 UMUMIY TO\'LOV: ${Math.round(stats.totalPayment).toLocaleString()} so'm\n`;
+      });
+      
+      report += '\n═══════════════════════════════\n';
+      const totalDistance = orders.rows.reduce((sum, o) => sum + (o.distance_km || 0), 0);
+      const totalDistanceFee = orders.rows.reduce((sum, o) => sum + (o.distance_fee || 0), 0);
+      const totalWorkFee = orders.rows.reduce((sum, o) => sum + (o.work_fee || 0), 0);
+      const totalProductSum = orders.rows.reduce((sum, o) => sum + (o.product_total || 0), 0);
+      const totalPaymentSum = orders.rows.reduce((sum, o) => sum + (o.total_payment || 0), 0);
+      
+      report += '📈 UMUMIY JAMI:\n';
+      report += `• Jami masofa: ${totalDistance.toFixed(1)} km\n`;
+      report += `• Masofa to\'lovi: ${Math.round(totalDistanceFee).toLocaleString()} so'm\n`;
+      report += `• Ish to\'lovi: ${Math.round(totalWorkFee).toLocaleString()} so'm\n`;
+      report += `• Mahsulot summasi: ${Math.round(totalProductSum).toLocaleString()} so'm\n`;
+      report += `• 💰 JAMI: ${Math.round(totalPaymentSum).toLocaleString()} so'm\n`;
+    }
+    
+    report += '\n═══════════════════════════════\n';
+    
+    const messages = [report];
+    if (report.length > 4096) {
+      const parts = report.match(/[\s\S]{1,4000}/g) || [report];
+      for (const part of parts) {
+        await ctx.reply(part);
+      }
+    } else {
+      await ctx.reply(report, { reply_markup: getAdminMenu() });
+    }
+  } catch (error) {
+    console.error('Daily report error:', error);
+    ctx.reply('Kunlik hisobot tayyorlanishda xatolik yuz berdi', { reply_markup: getAdminMenu() });
   }
 });
 

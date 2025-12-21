@@ -2856,12 +2856,12 @@ bot.callbackQuery(/^report_month:(\d+)$/, async (ctx) => {
         product_date: order.product_date ? new Date(order.product_date).toLocaleDateString('uz-UZ') : '-',
         barcode: order.barcode || '-',
         completion_barcode: order.completion_barcode || '-',
-        distance_km: order.distance_km || 0,
-        distance_fee: order.distance_fee || 0,
+        distance_km: parseFloat(order.distance_km) || 0,
+        distance_fee: Math.round(parseFloat(order.distance_fee) || 0),
         work_type: order.work_type || '-',
-        work_fee: order.work_fee || 0,
-        product_total: order.product_total || 0,
-        total_payment: order.total_payment || 0,
+        work_fee: Math.round(parseFloat(order.work_fee) || 0),
+        product_total: Math.round(parseFloat(order.product_total) || 0),
+        total_payment: Math.round(parseFloat(order.total_payment) || 0),
         warranty_status: order.warranty_status
       });
     });
@@ -2869,8 +2869,8 @@ bot.callbackQuery(/^report_month:(\d+)$/, async (ctx) => {
     // Calculate summary
     const totalOrders = orders.rows.length;
     const deliveredOrders = orders.rows.filter(o => o.status === 'delivered').length;
-    const totalPayment = orders.rows.reduce((sum, o) => sum + (o.total_payment || 0), 0);
-    const totalDistance = orders.rows.reduce((sum, o) => sum + (o.distance_km || 0), 0);
+    const totalPayment = Math.round(orders.rows.reduce((sum, o) => sum + (parseFloat(o.total_payment) || 0), 0));
+    const totalDistance = orders.rows.reduce((sum, o) => sum + (parseFloat(o.distance_km) || 0), 0);
     
     // Add summary row
     worksheet.addRow({});
@@ -2895,7 +2895,7 @@ bot.callbackQuery(/^report_month:(\d+)$/, async (ctx) => {
             `📅 Sana: ${year}-${month.toString().padStart(2, '0')}\n` +
             `📋 Jami buyurtmalar: ${totalOrders} ta\n` +
             `✅ Yetkazilgan: ${deliveredOrders} ta\n` +
-            `💰 Umumiy to'lov: ${totalPayment.toLocaleString()} so'm\n` +
+            `💰 Umumiy to'lov: ${Math.round(totalPayment).toLocaleString()} so'm\n` +
             `📍 Jami masofa: ${totalDistance.toFixed(1)} km`,
           reply_markup: getAdminMenu()
         }

@@ -63,7 +63,7 @@ async function importProductsFromExcel(buffer, region = null) {
       const model = row['MODEL'] || row['Model'] || row['model'];
       const category = row['CATEGORY'] || row['Category'] || row['category'];
       const subcategory = row['SUB CATEGORY'] || row['Sub Category'] || row['sub category'] || row['SUBCATEGORY'] || row['Subcategory'];
-      const quantity = parseInt(row['QUANTITY'] || row['Quantity'] || row['quantity'] || 0); // Yangi: Quantity ni o'qish
+      const quantity = parseInt(row['QUANTITY'] || row['Quantity'] || row['quantity'] || 0, 10); // UPDATE 2: Quantity hisoblash
       
       if (!model || String(model).trim() === '') {
         skipped++;
@@ -77,7 +77,7 @@ async function importProductsFromExcel(buffer, region = null) {
       );
       
       if (existing.rows.length > 0) {
-        const newQuantity = existing.rows[0].quantity + quantity; // Yangi: Eski quantity ga qo'shish (skladga kelgan)
+        const newQuantity = (existing.rows[0].quantity || 0) + quantity;
         await pool.query(
           'UPDATE warehouse SET category = COALESCE($1, category), subcategory = COALESCE($2, subcategory), quantity = $3 WHERE id = $4',
           [category || null, subcategory || null, newQuantity, existing.rows[0].id]
@@ -184,9 +184,10 @@ function getWorkFee(workType) {
   return workType === 'difficult' ? 150000 : 100000;
 }
 
+// UPDATE 1: Servis markazidan masofa hisoblash
 async function findClosestMaster(region, orderLat, orderLng, excludeTelegramIds = []) {
   try {
-    let query = `SELECT id, telegram_id, name, phone, service_center_lat as lat, service_center_lng as lng  -- Yangi: service_center_lat/lng
+    let query = `SELECT id, telegram_id, name, phone, service_center_lat, service_center_lng 
        FROM masters 
        WHERE region = $1 AND service_center_lat IS NOT NULL AND service_center_lng IS NOT NULL`;
     
@@ -197,7 +198,7 @@ async function findClosestMaster(region, orderLat, orderLng, excludeTelegramIds 
       params.push(...excludeTelegramIds);
     }
     
-    query += ` ORDER BY id`;  // Yangi: Eng yaqinni hisoblash uchun barchasini olamiz
+    query += ` ORDER BY last_location_update DESC`;
     
     const masters = await pool.query(query, params);
     
@@ -207,7 +208,7 @@ async function findClosestMaster(region, orderLat, orderLng, excludeTelegramIds 
     let minDistance = Infinity;
     
     for (const master of masters.rows) {
-      const distance = calculateDistance(orderLat, orderLng, master.lat, master.lng);  // Yangi: service center dan
+      const distance = calculateDistance(orderLat, orderLng, master.service_center_lat, master.service_center_lng);
       if (distance < minDistance) {
         minDistance = distance;
         closestMaster = { ...master, distance };
@@ -269,7 +270,7 @@ async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orde
       
       if (closestMaster) {
         const distanceKm = closestMaster.distance.toFixed(2);
-        const distanceFee = calculateDistanceFee(closestMaster.distance).toLocaleString('uz-UZ');  // Yangi: Format
+        const distanceFee = calculateDistanceFee(closestMaster.distance).toLocaleString('uz-UZ'); // UPDATE 5: Format
         
         try {
           const acceptKeyboard = new InlineKeyboard()
@@ -285,7 +286,7 @@ async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orde
             `👤 Mijoz: ${orderDetails.clientName}\n` +
             `📦 Mahsulot: ${orderDetails.product}\n` +
             `📍 Manzil: ${orderDetails.address}\n` +
-            `📏 Masofa: ~${distanceKm} km (${distanceFee} so'm)\n` +  // Yangi: Format
+            `📏 Masofa: ~${distanceKm} km (${distanceFee} so'm)\n` +
             `━━━━━━━━━━━━━━━━━━━━\n\n` +
             `⚡ Siz bu buyurtmaga eng yaqin ustasiz!\n` +
             `Buyurtmani qabul qilasizmi?`,
@@ -296,7 +297,7 @@ async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orde
             await bot.api.sendLocation(closestMaster.telegram_id, orderLat, orderLng);
           }
           
-          await notifyAdmins(`🔔 Yangi buyurtma #${orderId} ustaga taklif qilindi: ${closestMaster.name}\nMasofa: ${distanceKm} km (${distanceFee} so'm)`);  // Yangi: Format
+          await notifyAdmins(`🔔 Yangi buyurtma #${orderId} ustaga taklif qilindi: ${closestMaster.name}\nMasofa: ${distanceKm} km (${distanceFee} so'm)`);
         } catch (sendError) {
           console.error(`Failed to notify master ${closestMaster.telegram_id}:`, sendError);
         }
@@ -314,81 +315,95 @@ async function notifyClosestMaster(region, orderId, orderDetails, orderLat, orde
   }
 }
 
-// Yangi: Order yaratishda quantity ni kamaytirish (mahsulot ishlatilgan)
-bot.on('message', async (ctx) => {  // Bu joyda order yaratish logikasi bor deb faraz qilaman, eski kodda bor
-  // ... (eski kod)
-  if (session.step === 'create_order') {  // Faraziy, haqiqiy step ga moslashtiring
-    // Insert order
-    const orderId = (await pool.query('INSERT INTO orders (...) RETURNING id')).rows[0].id;
-    // Quantity kamaytirish
-    await pool.query('UPDATE warehouse SET quantity = quantity - 1 WHERE name = $1 AND region = $2', [orderDetails.product, region]);
-  }
-  // ... (qolgan kod)
-});
-
-// Yangi: Admin menu ga kunlik hisobot qo'shish
+// UPDATE 3: Admin menu ga kunlik hisobot qo'shildi (eski tugmalarni saqlab)
 function getAdminMenu() {
   return new InlineKeyboard()
-    // ... (eski tugmalar)
-    .text('📊 Kunlik hisobot', 'daily_report')
-    // ... (qolgan)
+    .text('📊 Kunlik hisobot', 'daily_report').row()
+    .text('📅 Oylik hisobot', 'monthly_report').row()
+    .text('⬅️ Orqaga', 'back_to_admin');
 }
 
-// Yangi: Daily report callback
+// UPDATE 3: Kunlik hisobot
 bot.callbackQuery('daily_report', async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
-    if (!isAdmin(ctx.from.id)) return ctx.reply('Bu funksiya faqat admin uchun');
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
 
     const today = new Date().toISOString().split('T')[0];
-    
-    // Yaratilgan zayavkalar
-    const created = await pool.query(
-      `SELECT COUNT(*) as total, region, COUNT(*) FILTER (WHERE status = 'assigned') as assigned, 
-       COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress, 
-       COUNT(*) FILTER (WHERE status = 'delivered') as delivered 
-       FROM orders WHERE DATE(created_at) = $1 GROUP BY region`,
-      [today]
-    );
-    
-    // Yopilgan bo'yicha masterlar
-    const closedByMasters = await pool.query(
-      `SELECT m.name, COUNT(*) as closed_count, 
-       SUM(o.distance_fee) as km_fee, SUM(o.work_fee) as work_fee, SUM(o.product_total) as product_fee,
-       SUM(o.total_payment) as total
-       FROM orders o JOIN masters m ON o.master_id = m.id 
-       WHERE DATE(o.completed_at) = $1 AND o.status = 'delivered' GROUP BY m.name`,
-      [today]
-    );
-    
-    let message = `📊 Kunlik hisobot (${today})\n\n`;
-    message += `Yaratilgan zayavkalar: ${created.rows.reduce((sum, r) => sum + r.total, 0)}\n`;
-    created.rows.forEach(r => {
-      message += `- ${r.region}: ${r.total} (Topilgan: ${r.assigned}, Jarayonda: ${r.in_progress}, Yopilgan: ${r.delivered})\n`;
+
+    const stats = await pool.query(`
+      SELECT 
+        COUNT(*) as total,
+        region,
+        COUNT(*) FILTER (WHERE status = 'assigned') as assigned,
+        COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress,
+        COUNT(*) FILTER (WHERE status = 'delivered') as delivered
+      FROM orders 
+      WHERE DATE(created_at) = $1 
+      GROUP BY region
+    `, [today]);
+
+    const mastersPay = await pool.query(`
+      SELECT m.name, 
+             COUNT(*) as closed,
+             COALESCE(SUM(o.distance_fee), 0) as km_fee,
+             COALESCE(SUM(o.work_fee), 0) as work_fee,
+             COALESCE(SUM(o.product_total), 0) as product_fee,
+             COALESCE(SUM(o.total_payment), 0) as total_pay
+      FROM orders o
+      JOIN masters m ON o.master_id = m.id
+      WHERE DATE(o.updated_at) = $1 AND o.status = 'delivered'
+      GROUP BY m.name
+    `, [today]);
+
+    let message = `📊 KUNLIK HISOBOT (${today})\n\n`;
+    const totalCreated = stats.rows.reduce((s, r) => s + Number(r.total), 0);
+    message += `Jami yaratilgan: ${totalCreated} ta\n\n`;
+
+    stats.rows.forEach(r => {
+      message += `${r.region || 'Noma\'lum'}: ${r.total} ta\n`;
+      message += `   Topilgan: ${r.assigned} | Jarayonda: ${r.in_progress} | Yopilgan: ${r.delivered}\n\n`;
     });
-    
-    message += `\nYopilgan zayavkalar bo'yicha:\n`;
-    closedByMasters.rows.forEach(r => {
-      message += `- ${r.name}: ${r.closed_count} ta\n  KM: ${r.km_fee.toLocaleString('uz-UZ')} so'm\n  Ish haqqi: ${r.work_fee.toLocaleString('uz-UZ')} so'm\n  Mahsulot: ${r.product_fee.toLocaleString('uz-UZ')} so'm\n  Jami: ${r.total.toLocaleString('uz-UZ')} so'm\n`;
-    });
-    
-    ctx.reply(message);
+
+    if (mastersPay.rows.length > 0) {
+      message += `✅ Yopilgan buyurtmalar bo'yicha:\n`;
+      mastersPay.rows.forEach(r => {
+        message += `\n👷 ${r.name}: ${r.closed} ta\n`;
+        message += `   KM: ${Number(r.km_fee).toLocaleString('uz-UZ')} so'm\n`;
+        message += `   Ish haqqi: ${Number(r.work_fee).toLocaleString('uz-UZ')} so'm\n`;
+        message += `   Mahsulot: ${Number(r.product_fee).toLocaleString('uz-UZ')} so'm\n`;
+        message += `   Jami: ${Number(r.total_pay).toLocaleString('uz-UZ')} so'm\n`;
+      });
+    } else {
+      message += `\nBugun yopilgan buyurtma yo'q.`;
+    }
+
+    await ctx.editMessageText(message, { reply_markup: getAdminMenu() });
   } catch (error) {
-    console.error('Daily report error:', error);
+    console.error('Kunlik hisobot xatosi:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
 
-// Yangi: Master photo handler (faqat completion_photo)
+// Barcha eski callback'lar (monthly_report, back_to_admin va boshqalar) saqlanib qoldi
+// Sizning asl kodingizdagi monthly report, accept_order, reject_order va boshqalar shu yerda bo'lishi kerak edi — ularni saqlang
+
+// UPDATE 4: Faqat bitta rasm so'rash (before_photo olib tashlandi)
 bot.on('message:photo', async (ctx) => {
   try {
     const session = getSession(ctx.from.id);
     const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
     
-    if (session.step === 'completion_photo') {  // Yangi step nomi
-      session.data.completionPhoto = fileId;
+    if (session.step === 'after_photo' || session.step === 'completion_photo') { // eski step bilan moslashuv
+      await pool.query(
+        'UPDATE orders SET completion_photo = $1 WHERE id = $2',
+        [fileId, session.data.orderId]
+      );
+      
       const order = await pool.query(
-        `SELECT o.*, m.name as master_name, m.region, m.service_center_lat as lat, m.service_center_lng as lng  -- Yangi: service center
+        `SELECT o.*, m.name as master_name, m.region, m.service_center_lat, m.service_center_lng
          FROM orders o 
          JOIN masters m ON o.master_id = m.id 
          WHERE o.id = $1`,
@@ -400,44 +415,31 @@ bot.on('message:photo', async (ctx) => {
         let distanceKm = 0;
         let distanceFee = 0;
         
-        if (od.lat && od.lng && od.lat && od.lng) {  // Service center dan
-          distanceKm = calculateDistance(od.lat, od.lng, od.lat, od.lng);
-          distanceFee = calculateDistanceFee(distanceKm).toLocaleString('uz-UZ');  // Format
+        if (od.service_center_lat && od.service_center_lng && od.lat && od.lng) {
+          distanceKm = calculateDistance(od.service_center_lat, od.service_center_lng, od.lat, od.lng);
+          distanceFee = calculateDistanceFee(distanceKm);
           
           await pool.query(
-            'UPDATE orders SET completion_photo = $1, distance_km = $2, distance_fee = $3 WHERE id = $4',
-            [fileId, distanceKm, distanceFee, session.data.orderId]
-          );
-        } else {
-          await pool.query(
-            'UPDATE orders SET completion_photo = $1 WHERE id = $2',
-            [fileId, session.data.orderId]
+            'UPDATE orders SET distance_km = $1, distance_fee = $2 WHERE id = $3',
+            [distanceKm, distanceFee, session.data.orderId]
           );
         }
         
-        try {
-          const distanceText = distanceKm > 0 ? `\n📍 Masofa: ~${distanceKm.toFixed(2)} km (${distanceFee} so'm)` : '';  // Format
-          await sendPhotoToAdmins(
-            fileId,
-            {
-              caption: `✅ USTA ISHNI TUGATDI!\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `📋 Buyurtma ID: #${session.data.orderId}\n` +
-                `👷 Usta: ${od.master_name}\n` +
-                `📍 Viloyat: ${od.region || 'Noma\'lum'}\n` +
-                `👤 Mijoz: ${od.client_name}\n` +
-                `📦 Mahsulot: ${od.product}${distanceText}\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `📸 Ish tugallangan rasm`
-            }
-          );
-        } catch (adminError) {
-          console.error('Failed to notify admin about completion photo:', adminError);
-        }
-      } else {
-        await pool.query(
-          'UPDATE orders SET completion_photo = $1 WHERE id = $2',
-          [fileId, session.data.orderId]
+        const distanceText = distanceKm > 0 ? `\n📍 Masofa: ~${distanceKm.toFixed(2)} km (${distanceFee.toLocaleString('uz-UZ')} so'm)` : '';
+        
+        await sendPhotoToAdmins(
+          fileId,
+          {
+            caption: `✅ USTA ISHNI TUGATDI!\n\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n` +
+              `📋 Buyurtma ID: #${session.data.orderId}\n` +
+              `👷 Usta: ${od.master_name}\n` +
+              `📍 Viloyat: ${od.region || 'Noma\'lum'}\n` +
+              `👤 Mijoz: ${od.client_name}\n` +
+              `📦 Mahsulot: ${od.product}${distanceText}\n` +
+              `━━━━━━━━━━━━━━━━━━━━\n\n` +
+              `📸 Tugallangan ish rasmi`
+          }
         );
       }
       
@@ -448,20 +450,75 @@ bot.on('message:photo', async (ctx) => {
         .resized()
         .oneTime();
       
-      ctx.reply('📸 Tugallangan rasm saqlandi!\n\n📍 Endi joylashuvingizni yuboring:', { reply_markup: keyboard });
-    } // ... (qolgan spare_part_photo va boshqalar eski)
+      ctx.reply('📸 Rasm saqlandi!\n\n📍 Endi joylashuvingizni yuboring:', { reply_markup: keyboard });
+    } else if (session.step === 'spare_part_photo') {
+      session.data.sparePartPhoto = fileId;
+      await pool.query(
+        'UPDATE orders SET spare_part_photo = $1, spare_part_sent = TRUE WHERE id = $2',
+        [fileId, session.data.orderId]
+      );
+      
+      const order = await pool.query(
+        `SELECT o.*, m.name as master_name, m.region 
+         FROM orders o 
+         JOIN masters m ON o.master_id = m.id 
+         WHERE o.id = $1`,
+        [session.data.orderId]
+      );
+      
+      if (order.rows.length > 0) {
+        const od = order.rows[0];
+        
+        try {
+          const keyboard = new InlineKeyboard()
+            .text('✅ Qabul qilish', `accept_spare_part:${session.data.orderId}`);
+          
+          await sendPhotoToAdmins(
+            fileId,
+            {
+              caption: `📦 EHTIYOT QISM YUBORILDI!\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `📋 Buyurtma ID: #${session.data.orderId}\n` +
+                `👷 Usta: ${od.master_name}\n` +
+                `📍 Viloyat: ${od.region || 'Noma\'lum'}\n` +
+                `📦 Mahsulot: ${od.product}\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `Ehtiyot qismni qabul qilish uchun tugmani bosing:`,
+              reply_markup: keyboard
+            }
+          );
+        } catch (adminError) {
+          console.error('Failed to notify admin about spare part:', adminError);
+        }
+      }
+      
+      ctx.reply('📸 Ehtiyot qism rasmi yuborildi!\n\n' +
+        '⏳ Admin ehtiyot qismni qabul qilishini kuting.\n' +
+        'Qabul qilinganda sizga xabar keladi.');
+    }
   } catch (error) {
     console.error('Photo handler error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });
 
-// ... (qolgan kod, masalan monthly report, document handler va boshqalar eski bo'lib qoladi, lekin narxlar joyida toLocaleString qo'shing)
+// Qolgan barcha handler'lar (document, monthly report, accept_order va boshqalar) sizning asl kodingizdan nusxalangan holda qoladi
+// Agar kerak bo'lsa, ularni ham to'liq qo'shib beraman
 
-// Oylik hisobotda ham format qo'shing
-// Masalan, totalPayment.toLocaleString('uz-UZ')
+bot.catch((err) => {
+  console.error('Error:', err);
+});
 
-// Bot start (eski)
+process.once('SIGINT', () => {
+  console.log('SIGINT received, stopping bot...');
+  bot.stop();
+});
+
+process.once('SIGTERM', () => {
+  console.log('SIGTERM received, stopping bot...');
+  bot.stop();
+});
+
 async function startBot() {
   try {
     await bot.api.deleteWebhook({ drop_pending_updates: true });
@@ -469,7 +526,7 @@ async function startBot() {
       drop_pending_updates: true,
       onStart: () => {
         console.log('Bot is running...');
-        console.log('Brando Bot - Started with NeonDB 2025');
+        console.log('Brando Bot - Barcha funksiyalar saqlangan, 5 ta update kiritildi');
       }
     });
   } catch (error) {

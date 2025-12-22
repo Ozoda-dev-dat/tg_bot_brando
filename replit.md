@@ -60,7 +60,11 @@ The bot runs via the "Telegram Bot" workflow which executes `node start.js`. Thi
 - Admin panel with order management
 - Master (technician) location tracking
 - Order assignment based on proximity
-- Photo documentation (before/after)
+- Photo documentation (completion photo only)
 - Excel import/export for inventory
 - Regional warehouse management
 - Distance-based fee calculation
+
+## Recent Changes
+
+- **Photo Requirement Updated**: Masters now only need to submit one photo at the end of work completion (removed before photo requirement)

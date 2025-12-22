@@ -2595,8 +2595,8 @@ bot.callbackQuery(/^work_type:(\w+):(\d+)$/, async (ctx) => {
     
     const session = getSession(ctx.from.id);
     session.data.orderId = orderId;
-    session.step = 'before_photo';
-    ctx.reply('📸 Ishni boshlashdan OLDINGI rasmni yuboring:');
+    session.step = 'after_photo';
+    ctx.reply('📸 Ishni tugatgach rasmni yuboring:');
   } catch (error) {
     console.error('Work type callback error:', error);
     ctx.reply('Xatolik yuz berdi');
@@ -2993,46 +2993,7 @@ bot.on('message:photo', async (ctx) => {
     const session = getSession(ctx.from.id);
     const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
     
-    if (session.step === 'before_photo') {
-      session.data.beforePhoto = fileId;
-      await pool.query(
-        'UPDATE orders SET before_photo = $1 WHERE id = $2',
-        [fileId, session.data.orderId]
-      );
-      
-      const order = await pool.query(
-        `SELECT o.*, m.name as master_name, m.region 
-         FROM orders o 
-         JOIN masters m ON o.master_id = m.id 
-         WHERE o.id = $1`,
-        [session.data.orderId]
-      );
-      
-      if (order.rows.length > 0) {
-        const od = order.rows[0];
-        try {
-          await sendPhotoToAdmins(
-            fileId,
-            {
-              caption: `🚀 USTA ISHNI BOSHLADI!\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `📋 Buyurtma ID: #${session.data.orderId}\n` +
-                `👷 Usta: ${od.master_name}\n` +
-                `📍 Viloyat: ${od.region || 'Noma\'lum'}\n` +
-                `👤 Mijoz: ${od.client_name}\n` +
-                `📦 Mahsulot: ${od.product}\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `📸 Ishdan OLDINGI rasm`
-            }
-          );
-        } catch (adminError) {
-          console.error('Failed to notify admin about before photo:', adminError);
-        }
-      }
-      
-      session.step = 'after_photo';
-      ctx.reply('📸 Oldingi rasm saqlandi!\n\n📸 Endi KEYINGI rasmni yuboring:');
-    } else if (session.step === 'after_photo') {
+    if (session.step === 'after_photo') {
       session.data.afterPhoto = fileId;
       const order = await pool.query(
         `SELECT o.*, m.name as master_name, m.region, m.service_center_id,

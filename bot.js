@@ -372,6 +372,7 @@ function getAdminMenu() {
   return new Keyboard()
     .text('+ Yangi yetkazish').row()
     .text('➕ Usta qo\'shish').text('➕ Mahsulot qo\'shish').row()
+    .text('🏢 Xizmat markazicha qo\'shish').row()
     .text('📥 Excel import').text('📋 Barcha buyurtmalar').row()
     .text('👥 Barcha ustalar').text('📦 Ombor').row()
     .text('📅 Kunlik hisobot').text('📊 Oylik hisobot').row()
@@ -626,6 +627,21 @@ bot.hears('➕ Mahsulot qo\'shish', async (ctx) => {
     session.step = 'admin_product_name';
     session.data = {};
     ctx.reply('Mahsulot nomini kiriting:');
+  } catch (error) {
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.hears('🏢 Xizmat markazicha qo\'shish', async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      return ctx.reply('Bu funksiya faqat admin uchun');
+    }
+    
+    const session = getSession(ctx.from.id);
+    session.step = 'admin_service_center_name';
+    session.data = {};
+    ctx.reply('Xizmat markazi nomini kiriting:');
   } catch (error) {
     ctx.reply('Xatolik yuz berdi');
   }
@@ -1389,6 +1405,31 @@ bot.callbackQuery(/^region_sub:(.+)$/, async (ctx) => {
   }
 });
 
+bot.callbackQuery(/^sc_region:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'admin_service_center_region') {
+      return;
+    }
+    
+    const region = ctx.match[1];
+    session.data.serviceCenterRegion = region;
+    session.step = 'admin_service_center_lat';
+    
+    await ctx.editMessageText(
+      `✅ Tanlangan viloyat: ${region}\n\n` +
+      `Endi xizmat markazi koordinatalarini kiriting.\n\n` +
+      `📍 Kenglik koordinatasini kiriting (latitude):\n` +
+      `(Masalan: 41.2995)`
+    );
+  } catch (error) {
+    console.error('Service center region callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
 bot.on('message:text', async (ctx) => {
   try {
     const session = getSession(ctx.from.id);
@@ -1468,6 +1509,53 @@ bot.on('message:text', async (ctx) => {
         } else {
           ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
         }
+      }
+    } else if (session.step === 'admin_service_center_name') {
+      session.data.serviceCenterName = ctx.message.text;
+      session.step = 'admin_service_center_region';
+      
+      const categories = getRegionCategories();
+      const keyboard = new InlineKeyboard();
+      categories.forEach((cat, index) => {
+        keyboard.text(cat, `sc_region:${cat}`);
+        if ((index + 1) % 2 === 0) keyboard.row();
+      });
+      
+      ctx.reply('📍 Xizmat markazi viloyatini tanlang:', { reply_markup: keyboard });
+    } else if (session.step === 'admin_service_center_lat') {
+      const lat = parseFloat(ctx.message.text);
+      if (isNaN(lat)) {
+        return ctx.reply('Iltimos, to\'g\'ri kenglik koordinatini kiriting (masalan: 41.2995)');
+      }
+      session.data.serviceCenterLat = lat;
+      session.step = 'admin_service_center_lng';
+      ctx.reply('📍 Uzoqlik koordinatasini kiriting (longitude):');
+    } else if (session.step === 'admin_service_center_lng') {
+      const lng = parseFloat(ctx.message.text);
+      if (isNaN(lng)) {
+        return ctx.reply('Iltimos, to\'g\'ri uzoqlik koordinatini kiriting (masalan: 69.2401)');
+      }
+      session.data.serviceCenterLng = lng;
+      
+      try {
+        await pool.query(
+          'INSERT INTO service_centers (name, region, lat, lng) VALUES ($1, $2, $3, $4)',
+          [session.data.serviceCenterName, session.data.serviceCenterRegion, 
+           session.data.serviceCenterLat, session.data.serviceCenterLng]
+        );
+        
+        ctx.reply(
+          `✅ Xizmat markazi qo'shildi!\n\n` +
+          `Nomi: ${session.data.serviceCenterName}\n` +
+          `Viloyat: ${session.data.serviceCenterRegion}\n` +
+          `Koordinatalar: ${session.data.serviceCenterLat.toFixed(4)}, ${session.data.serviceCenterLng.toFixed(4)}`,
+          { reply_markup: getAdminMenu() }
+        );
+        
+        clearSession(ctx.from.id);
+      } catch (dbError) {
+        ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik', { reply_markup: getAdminMenu() });
+        clearSession(ctx.from.id);
       }
     } else if (session.step === 'excel_region_select') {
       const regionInput = ctx.message.text.trim();
@@ -1858,7 +1946,10 @@ bot.on('message:location', async (ctx) => {
       );
       
       const order = await pool.query(
-        'SELECT lat, lng, client_name, address, product FROM orders WHERE id = $1',
+        `SELECT o.lat, o.lng, o.client_name, o.address, o.product, m.service_center_id
+         FROM orders o
+         JOIN masters m ON o.master_id = m.id
+         WHERE o.id = $1`,
         [session.data.orderId]
       );
       
@@ -1866,8 +1957,27 @@ bot.on('message:location', async (ctx) => {
       if (order.rows.length > 0 && order.rows[0].lat && order.rows[0].lng) {
         const clientLat = order.rows[0].lat;
         const clientLng = order.rows[0].lng;
-        const distance = calculateDistance(masterLat, masterLng, clientLat, clientLng);
-        distanceText = `\n📏 Mijozgacha masofa: ~${distance.toFixed(2)} km`;
+        
+        let serviceCenter = null;
+        let distanceFromServiceCenter = 0;
+        
+        if (order.rows[0].service_center_id) {
+          serviceCenter = await pool.query(
+            'SELECT lat, lng FROM service_centers WHERE id = $1',
+            [order.rows[0].service_center_id]
+          );
+          
+          if (serviceCenter.rows.length > 0) {
+            distanceFromServiceCenter = calculateDistance(
+              serviceCenter.rows[0].lat, 
+              serviceCenter.rows[0].lng, 
+              clientLat, 
+              clientLng
+            );
+          }
+        }
+        
+        distanceText = `\n📏 Xizmat markazidan masofa: ~${distanceFromServiceCenter.toFixed(2)} km`;
         
         await ctx.reply(
           `📍 GPS joylashuv saqlandi!\n` +

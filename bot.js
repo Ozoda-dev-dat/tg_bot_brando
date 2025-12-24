@@ -1374,19 +1374,72 @@ bot.callbackQuery(/^region_sub:(.+)$/, async (ctx) => {
     const category = session.data.regionCategory;
     const fullRegion = `${category}, ${subcategory}`;
     session.data.masterRegion = fullRegion;
+    session.step = 'admin_master_service_center_selection';
+    
+    // Get available service centers for this region
+    const serviceCenters = await pool.query(
+      'SELECT id, name FROM service_centers WHERE region = $1 ORDER BY name',
+      [category]
+    );
+    
+    await ctx.editMessageText(`✅ Tanlangan hudud: ${fullRegion}\n\nEsta xizmat markazini tanlang:`);
+    
+    if (serviceCenters.rows.length === 0) {
+      ctx.reply(
+        '⚠️ Ushbu viloyatda hali xizmat markazi yo\'q.\n' +
+        'Avval "🏢 Xizmat markazicha qo\'shish" tugmasini orqali xizmat markazi qo\'shing.',
+        { reply_markup: getAdminMenu() }
+      );
+      clearSession(ctx.from.id);
+      return;
+    }
+    
+    const keyboard = new InlineKeyboard();
+    serviceCenters.rows.forEach(sc => {
+      keyboard.text(sc.name, `select_sc:${sc.id}`).row();
+    });
+    
+    ctx.reply('🏢 Xizmat markazini tanlang:', { reply_markup: keyboard });
+  } catch (error) {
+    console.error('Region subcategory callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+
+bot.callbackQuery(/^select_sc:(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'admin_master_service_center_selection') {
+      return;
+    }
+    
+    const serviceCenterId = parseInt(ctx.match[1]);
+    session.data.serviceCenterId = serviceCenterId;
     
     try {
-      await pool.query(
-        'INSERT INTO masters (name, phone, telegram_id, region) VALUES ($1, $2, $3, $4)',
-        [session.data.masterName, session.data.masterPhone, session.data.masterTelegramId, fullRegion]
+      // Get service center details
+      const scDetails = await pool.query(
+        'SELECT name FROM service_centers WHERE id = $1',
+        [serviceCenterId]
       );
+      
+      // Insert master with service_center_id
+      await pool.query(
+        'INSERT INTO masters (name, phone, telegram_id, region, service_center_id) VALUES ($1, $2, $3, $4, $5)',
+        [session.data.masterName, session.data.masterPhone, session.data.masterTelegramId, session.data.masterRegion, serviceCenterId]
+      );
+      
+      const scName = scDetails.rows.length > 0 ? scDetails.rows[0].name : 'Noma\'lum';
       
       await ctx.editMessageText(
         `✅ Yangi usta qo'shildi!\n\n` +
         `Ism: ${session.data.masterName}\n` +
         `Telefon: ${session.data.masterPhone}\n` +
         `Telegram ID: ${session.data.masterTelegramId}\n` +
-        `Hudud: ${fullRegion}`
+        `Hudud: ${session.data.masterRegion}\n` +
+        `🏢 Xizmat markazi: ${scName}`
       );
       
       ctx.reply('Admin menyu:', { reply_markup: getAdminMenu() });
@@ -1400,7 +1453,7 @@ bot.callbackQuery(/^region_sub:(.+)$/, async (ctx) => {
       clearSession(ctx.from.id);
     }
   } catch (error) {
-    console.error('Region subcategory callback error:', error);
+    console.error('Service center selection callback error:', error);
     ctx.reply('Xatolik yuz berdi');
   }
 });

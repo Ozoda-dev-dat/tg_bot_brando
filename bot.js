@@ -1416,14 +1416,19 @@ bot.callbackQuery(/^sc_region:(.+)$/, async (ctx) => {
     
     const region = ctx.match[1];
     session.data.serviceCenterRegion = region;
-    session.step = 'admin_service_center_lat';
+    session.step = 'admin_service_center_location';
+    
+    const locationKeyboard = new Keyboard()
+      .requestLocation('📍 Xizmat markazi joylashuvini yuborish')
+      .resized()
+      .oneTime();
     
     await ctx.editMessageText(
       `✅ Tanlangan viloyat: ${region}\n\n` +
-      `Endi xizmat markazi koordinatalarini kiriting.\n\n` +
-      `📍 Kenglik koordinatasini kiriting (latitude):\n` +
-      `(Masalan: 41.2995)`
+      `Endi xizmat markazi joylashuvini Telegram location button orqali yuboring.`
     );
+    
+    ctx.reply('📍 Joylashuvni yuboring:', { reply_markup: locationKeyboard });
   } catch (error) {
     console.error('Service center region callback error:', error);
     ctx.reply('Xatolik yuz berdi');
@@ -1522,41 +1527,6 @@ bot.on('message:text', async (ctx) => {
       });
       
       ctx.reply('📍 Xizmat markazi viloyatini tanlang:', { reply_markup: keyboard });
-    } else if (session.step === 'admin_service_center_lat') {
-      const lat = parseFloat(ctx.message.text);
-      if (isNaN(lat)) {
-        return ctx.reply('Iltimos, to\'g\'ri kenglik koordinatini kiriting (masalan: 41.2995)');
-      }
-      session.data.serviceCenterLat = lat;
-      session.step = 'admin_service_center_lng';
-      ctx.reply('📍 Uzoqlik koordinatasini kiriting (longitude):');
-    } else if (session.step === 'admin_service_center_lng') {
-      const lng = parseFloat(ctx.message.text);
-      if (isNaN(lng)) {
-        return ctx.reply('Iltimos, to\'g\'ri uzoqlik koordinatini kiriting (masalan: 69.2401)');
-      }
-      session.data.serviceCenterLng = lng;
-      
-      try {
-        await pool.query(
-          'INSERT INTO service_centers (name, region, lat, lng) VALUES ($1, $2, $3, $4)',
-          [session.data.serviceCenterName, session.data.serviceCenterRegion, 
-           session.data.serviceCenterLat, session.data.serviceCenterLng]
-        );
-        
-        ctx.reply(
-          `✅ Xizmat markazi qo'shildi!\n\n` +
-          `Nomi: ${session.data.serviceCenterName}\n` +
-          `Viloyat: ${session.data.serviceCenterRegion}\n` +
-          `Koordinatalar: ${session.data.serviceCenterLat.toFixed(4)}, ${session.data.serviceCenterLng.toFixed(4)}`,
-          { reply_markup: getAdminMenu() }
-        );
-        
-        clearSession(ctx.from.id);
-      } catch (dbError) {
-        ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik', { reply_markup: getAdminMenu() });
-        clearSession(ctx.from.id);
-      }
     } else if (session.step === 'excel_region_select') {
       const regionInput = ctx.message.text.trim();
       session.data.importRegion = regionInput.toLowerCase() === 'hammasi' ? null : regionInput;
@@ -1921,6 +1891,32 @@ bot.on('message:location', async (ctx) => {
         `Endi botdan foydalanishingiz mumkin.`,
         { reply_markup: getMainMenu() }
       );
+      return;
+    }
+    
+    if (session.step === 'admin_service_center_location') {
+      const lat = ctx.message.location.latitude;
+      const lng = ctx.message.location.longitude;
+      
+      try {
+        await pool.query(
+          'INSERT INTO service_centers (name, region, lat, lng) VALUES ($1, $2, $3, $4)',
+          [session.data.serviceCenterName, session.data.serviceCenterRegion, lat, lng]
+        );
+        
+        ctx.reply(
+          `✅ Xizmat markazi qo'shildi!\n\n` +
+          `Nomi: ${session.data.serviceCenterName}\n` +
+          `Viloyat: ${session.data.serviceCenterRegion}\n` +
+          `📍 Koordinatalar: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+          { reply_markup: getAdminMenu() }
+        );
+        
+        clearSession(ctx.from.id);
+      } catch (dbError) {
+        ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik', { reply_markup: getAdminMenu() });
+        clearSession(ctx.from.id);
+      }
       return;
     }
     

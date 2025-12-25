@@ -2243,17 +2243,17 @@ bot.callbackQuery(/^product_next:(\d+)$/, async (ctx) => {
     let products;
     if (session.data.productCategory && session.data.productSubcategory) {
       products = await pool.query(
-        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND subcategory = $2 AND (region = $3 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND subcategory = $2 AND (region = $3 OR region IS NULL OR region = \'\') AND quantity > 0 ORDER BY name',
         [session.data.productCategory, session.data.productSubcategory, session.data.masterRegion]
       );
     } else if (session.data.productCategory) {
       products = await pool.query(
-        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL OR region = \'\') AND quantity > 0 ORDER BY name',
         [session.data.productCategory, session.data.masterRegion]
       );
     } else {
       products = await pool.query(
-        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE (region = $1 OR region IS NULL OR region = \'\') AND quantity > 0 ORDER BY name',
         [session.data.masterRegion]
       );
     }

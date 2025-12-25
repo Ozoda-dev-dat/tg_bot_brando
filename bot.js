@@ -1136,7 +1136,7 @@ bot.callbackQuery(/^select_master:(\d+)$/, async (ctx) => {
     session.step = 'product_category';
     
     const categories = await pool.query(
-      'SELECT DISTINCT category FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 AND category IS NOT NULL ORDER BY category',
+      'SELECT DISTINCT category FROM warehouse WHERE (region = $1 OR region IS NULL OR $1 IS NULL) AND quantity > 0 AND category IS NOT NULL ORDER BY category',
       [master.region]
     );
     
@@ -1171,7 +1171,7 @@ bot.callbackQuery(/^product_cat:(.+)$/, async (ctx) => {
     session.step = 'product_subcategory';
     
     const subcategories = await pool.query(
-      'SELECT DISTINCT subcategory FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL) AND quantity > 0 AND subcategory IS NOT NULL ORDER BY subcategory',
+      'SELECT DISTINCT subcategory FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL OR $2 IS NULL) AND quantity > 0 AND subcategory IS NOT NULL ORDER BY subcategory',
       [category, session.data.masterRegion]
     );
     
@@ -1187,7 +1187,7 @@ bot.callbackQuery(/^product_cat:(.+)$/, async (ctx) => {
       session.data.productPage = 0;
       
       const products = await pool.query(
-        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL) AND quantity > 0 ORDER BY name',
+        'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL OR $2 IS NULL) AND quantity > 0 ORDER BY name',
         [category, session.data.masterRegion]
       );
       
@@ -1228,7 +1228,7 @@ bot.callbackQuery(/^product_subcat:(.+)$/, async (ctx) => {
     session.data.productPage = 0;
     
     const products = await pool.query(
-      'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND subcategory = $2 AND (region = $3 OR region IS NULL) AND quantity > 0 ORDER BY name',
+      'SELECT DISTINCT name, quantity FROM warehouse WHERE category = $1 AND subcategory = $2 AND (region = $3 OR region IS NULL OR $3 IS NULL) AND quantity > 0 ORDER BY name',
       [session.data.productCategory, subcategory, session.data.masterRegion]
     );
     
@@ -1262,7 +1262,7 @@ bot.callbackQuery('product_cat_back', async (ctx) => {
     delete session.data.productCategory;
     
     const categories = await pool.query(
-      'SELECT DISTINCT category FROM warehouse WHERE (region = $1 OR region IS NULL) AND quantity > 0 AND category IS NOT NULL ORDER BY category',
+      'SELECT DISTINCT category FROM warehouse WHERE (region = $1 OR region IS NULL OR $1 IS NULL) AND quantity > 0 AND category IS NOT NULL ORDER BY category',
       [session.data.masterRegion]
     );
     
@@ -1292,7 +1292,7 @@ bot.callbackQuery('product_subcat_back', async (ctx) => {
     const category = session.data.productCategory;
     
     const subcategories = await pool.query(
-      'SELECT DISTINCT subcategory FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL) AND quantity > 0 AND subcategory IS NOT NULL ORDER BY subcategory',
+      'SELECT DISTINCT subcategory FROM warehouse WHERE category = $1 AND (region = $2 OR region IS NULL OR $2 IS NULL) AND quantity > 0 AND subcategory IS NOT NULL ORDER BY subcategory',
       [category, session.data.masterRegion]
     );
     
@@ -1589,32 +1589,17 @@ bot.on('message:text', async (ctx) => {
       ctx.reply('Subkategoriyani kiriting (ixtiyoriy, o\'tkazish uchun "-" yozing):');
     } else if (session.step === 'admin_product_subcategory') {
       session.data.productSubcategory = ctx.message.text === '-' ? null : ctx.message.text;
+      session.step = 'admin_product_region';
       
-      try {
-        await pool.query(
-          'INSERT INTO warehouse (name, quantity, price, category, subcategory) VALUES ($1, $2, $3, $4, $5)',
-          [session.data.productName, session.data.productQuantity, session.data.productPrice, 
-           session.data.productCategory, session.data.productSubcategory]
-        );
-        
-        ctx.reply(
-          `✅ Yangi mahsulot qo'shildi!\n\n` +
-          `Nomi: ${session.data.productName}\n` +
-          `Miqdor: ${session.data.productQuantity}\n` +
-          `Narx: ${session.data.productPrice} so'm\n` +
-          `Kategoriya: ${session.data.productCategory || 'Yo\'q'}\n` +
-          `Subkategoriya: ${session.data.productSubcategory || 'Yo\'q'}`,
-          { reply_markup: getAdminMenu() }
-        );
-        
-        clearSession(ctx.from.id);
-      } catch (dbError) {
-        if (dbError.code === '23505') {
-          ctx.reply('Xatolik: Bu mahsulot allaqachon mavjud');
-        } else {
-          ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik');
-        }
-      }
+      const categories = getRegionCategories();
+      const keyboard = new InlineKeyboard();
+      keyboard.text('🌍 Hammasi (Global)', 'prod_region:global').row();
+      categories.forEach((cat, index) => {
+        keyboard.text(cat, `prod_region:${cat}`);
+        if ((index + 1) % 2 === 0) keyboard.row();
+      });
+      
+      ctx.reply('📍 Mahsulot qaysi hudud uchun ekanligini tanlang:', { reply_markup: keyboard });
     } else if (session.step === 'admin_service_center_name') {
       session.data.serviceCenterName = ctx.message.text;
       session.step = 'admin_service_center_region';

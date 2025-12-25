@@ -1488,6 +1488,53 @@ bot.callbackQuery(/^sc_region:(.+)$/, async (ctx) => {
   }
 });
 
+// ==========================================
+
+bot.callbackQuery(/^prod_region:(.+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const session = getSession(ctx.from.id);
+    
+    if (session.step !== 'admin_product_region') {
+      return;
+    }
+    
+    const region = ctx.match[1] === 'global' ? null : ctx.match[1];
+    session.data.productRegion = region;
+    
+    try {
+      await pool.query(
+        'INSERT INTO warehouse (name, quantity, price, category, subcategory, region) VALUES ($1, $2, $3, $4, $5, $6)',
+        [session.data.productName, session.data.productQuantity, session.data.productPrice, 
+         session.data.productCategory, session.data.productSubcategory, region]
+      );
+      
+      const regionDisplay = region || 'Hammasi (Global)';
+      
+      await ctx.editMessageText(
+        `✅ Yangi mahsulot qo'shildi!\n\n` +
+        `Nomi: ${session.data.productName}\n` +
+        `Miqdor: ${session.data.productQuantity}\n` +
+        `Narx: ${session.data.productPrice} so'm\n` +
+        `Hudud: ${regionDisplay}\n` +
+        `Kategoriya: ${session.data.productCategory || 'Yo\'q'}\n` +
+        `Subkategoriya: ${session.data.productSubcategory || 'Yo\'q'}`,
+        { reply_markup: getAdminMenu() }
+      );
+      
+      clearSession(ctx.from.id);
+    } catch (dbError) {
+      console.error('Add product database error:', dbError);
+      ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik', { reply_markup: getAdminMenu() });
+      clearSession(ctx.from.id);
+    }
+  } catch (error) {
+    console.error('Product region callback error:', error);
+    ctx.reply('Xatolik yuz berdi');
+  }
+});
+// ==========================================
+
 bot.on('message:text', async (ctx) => {
   try {
     const session = getSession(ctx.from.id);

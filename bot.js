@@ -1503,16 +1503,28 @@ bot.callbackQuery(/^prod_region:(.+)$/, async (ctx) => {
     session.data.productRegion = region;
     
     try {
-      await pool.query(
-        'INSERT INTO warehouse (name, quantity, price, category, subcategory, region) VALUES ($1, $2, $3, $4, $5, $6)',
-        [session.data.productName, session.data.productQuantity, session.data.productPrice, 
-         session.data.productCategory, session.data.productSubcategory, region]
+      const existingProduct = await pool.query(
+        'SELECT id, quantity FROM warehouse WHERE name = $1 AND (region = $2 OR (region IS NULL AND $2 IS NULL))',
+        [session.data.productName, region]
       );
+      
+      if (existingProduct.rows.length > 0) {
+        await pool.query(
+          'UPDATE warehouse SET quantity = quantity + $1, price = $2, category = COALESCE($3, category), subcategory = COALESCE($4, subcategory) WHERE id = $5',
+          [session.data.productQuantity, session.data.productPrice, session.data.productCategory, session.data.productSubcategory, existingProduct.rows[0].id]
+        );
+      } else {
+        await pool.query(
+          'INSERT INTO warehouse (name, quantity, price, category, subcategory, region) VALUES ($1, $2, $3, $4, $5, $6)',
+          [session.data.productName, session.data.productQuantity, session.data.productPrice, 
+           session.data.productCategory, session.data.productSubcategory, region]
+        );
+      }
       
       const regionDisplay = region || 'Hammasi (Global)';
       
       await ctx.editMessageText(
-        `✅ Yangi mahsulot qo'shildi!\n\n` +
+        `✅ Mahsulot saqlandi!\n\n` +
         `Nomi: ${session.data.productName}\n` +
         `Miqdor: ${session.data.productQuantity}\n` +
         `Narx: ${session.data.productPrice} so'm\n` +
@@ -1524,7 +1536,7 @@ bot.callbackQuery(/^prod_region:(.+)$/, async (ctx) => {
       
       clearSession(ctx.from.id);
     } catch (dbError) {
-      console.error('Add product database error:', dbError);
+      console.error('Add/Update product database error:', dbError);
       ctx.reply('Ma\'lumotlar bazasiga saqlashda xatolik', { reply_markup: getAdminMenu() });
       clearSession(ctx.from.id);
     }
